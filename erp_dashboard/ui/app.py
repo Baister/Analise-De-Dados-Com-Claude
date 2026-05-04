@@ -11,7 +11,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import threading
 from datetime import datetime
 
-from config.settings import APP_TITLE, APP_VERSION, CORES, DB_CONFIG
+from config.settings import APP_TITLE, APP_VERSION, CORES, DB_CONFIG, ALERTAS
 from core.database import db
 from bots.analise_bots import BotManager
 from core.exportador import exportar_excel
@@ -20,6 +20,32 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 C = CORES  # alias curto
+
+
+def _brl(val) -> str:
+    """Formata valor como moeda Real brasileiro: R$ 1.234,56"""
+    try:
+        s = f"{float(val):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {s}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _brl0(val) -> str:
+    """Formata valor como Real sem casas decimais: R$ 1.234"""
+    try:
+        s = f"{float(val):,.0f}".replace(",", ".")
+        return f"R$ {s}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _num(val) -> str:
+    """Formata número inteiro com separador de milhar brasileiro: 1.234"""
+    try:
+        return f"{float(val):,.0f}".replace(",", ".")
+    except (TypeError, ValueError):
+        return "—"
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -68,15 +94,22 @@ class Grafico(ctk.CTkFrame):
             plt.close(self._fig)
             self._fig = None
 
-    def barras(self, labels, valores, cor=C["accent_azul"], horizontal=False):
+    def barras(self, labels, valores, cor=C["accent_azul"], horizontal=False, fmt_val=None):
         self._clean()
         fig, ax = plt.subplots(figsize=(5, 3))
         fig.patch.set_facecolor(C["card"])
         ax.set_facecolor(C["card"])
+        _fmt = fmt_val if fmt_val else _num
         if horizontal:
             bars = ax.barh(labels[::-1], valores[::-1], color=cor, height=0.6)
             ax.tick_params(axis="y", labelsize=8, colors=C["subtext"])
             ax.tick_params(axis="x", labelsize=8, colors=C["subtext"])
+            if valores:
+                ax.set_xlim(0, max(valores) * 1.28)
+            for bar, v in zip(bars, valores[::-1]):
+                ax.text(bar.get_width(), bar.get_y() + bar.get_height() / 2,
+                        f"  {_fmt(v)}", va="center", ha="left",
+                        fontsize=7, color=C["subtext"])
         else:
             bars = ax.bar(labels, valores, color=cor, width=0.6, zorder=3)
             ax.tick_params(colors=C["subtext"], labelsize=8)
@@ -84,6 +117,12 @@ class Grafico(ctk.CTkFrame):
             ax.set_axisbelow(True)
             lbl_rot = 30 if len(labels) > 6 else 0
             ax.set_xticklabels(labels, rotation=lbl_rot, ha="right" if lbl_rot else "center")
+            if valores:
+                ax.set_ylim(0, max(valores) * 1.2)
+            for bar, v in zip(bars, valores):
+                ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                        _fmt(v), va="bottom", ha="center",
+                        fontsize=7, color=C["subtext"])
         ax.spines[:].set_visible(False)
         fig.tight_layout(pad=1.0)
         self._fig = fig
@@ -133,6 +172,42 @@ class Grafico(ctk.CTkFrame):
         self._canvas.draw()
         self._canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
 
+    def barras_agrupadas(self, labels, series: dict):
+        """series = {"Série A": [v1, v2, ...], "Série B": [v1, v2, ...]}"""
+        self._clean()
+        import numpy as np
+        n_grupos = len(labels)
+        n_series = len(series)
+        if n_grupos == 0 or n_series == 0:
+            return
+        fig, ax = plt.subplots(figsize=(max(5, n_grupos * 0.9), 3.5))
+        fig.patch.set_facecolor(C["card"])
+        ax.set_facecolor(C["card"])
+        x       = np.arange(n_grupos)
+        largura = 0.8 / n_series
+        paleta  = [C["accent_azul"], C["success"], C["warning"], C["accent_verm"], "#8b5cf6"]
+        for idx, (nome, vals) in enumerate(series.items()):
+            offset = (idx - (n_series - 1) / 2) * largura
+            bars   = ax.bar(x + offset, vals, largura * 0.9,
+                            label=nome, color=paleta[idx % len(paleta)], zorder=3)
+            for bar, v in zip(bars, vals):
+                if v and v > 0:
+                    ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                            _num(v), va="bottom", ha="center",
+                            fontsize=6, color=C["subtext"])
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=7)
+        ax.tick_params(colors=C["subtext"], labelsize=8)
+        ax.yaxis.grid(True, color=C["card_border"], zorder=0)
+        ax.set_axisbelow(True)
+        ax.spines[:].set_visible(False)
+        ax.legend(fontsize=8, facecolor=C["card"], labelcolor=C["text"], loc="upper right")
+        fig.tight_layout(pad=1.0)
+        self._fig = fig
+        self._canvas = FigureCanvasTkAgg(fig, master=self)
+        self._canvas.draw()
+        self._canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
+
 
 class Tabela(ctk.CTkScrollableFrame):
     def __init__(self, master, colunas: list[str], **kw):
@@ -150,9 +225,11 @@ class Tabela(ctk.CTkScrollableFrame):
             return "—"
         if isinstance(val, float):
             kw = col.lower()
-            if any(x in kw for x in ("fat", "valor", "total", "divida", "ticket", "med", "margen", "custo", "rcbo")):
-                return f"R$ {val:,.2f}"
-            return f"{val:,.1f}"
+            if any(x in kw for x in ("fat", "valor", "total", "divida", "ticket", "custo", "rcbo", "vlr", "val_")):
+                return _brl(val)
+            return f"{val:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        if isinstance(val, int):
+            return f"{val:,}".replace(",", ".")
         return str(val)
 
     def populate(self, dados: list[dict]):
@@ -185,11 +262,13 @@ def _secao(master, texto: str):
 class TelaDashboard(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
+        self._ultimo_fat: float = 0.0
         self._build()
 
     def _build(self):
+        # KPIs
         row1 = ctk.CTkFrame(self, fg_color="transparent")
-        row1.pack(fill="x", pady=(0, 10))
+        row1.pack(fill="x", pady=(0, 6))
         self.k_fat    = KpiCard(row1, "Faturamento do Mês", cor=C["accent_azul"])
         self.k_docs   = KpiCard(row1, "Documentos")
         self.k_cli    = KpiCard(row1, "Clientes Ativos", cor=C["success"])
@@ -198,23 +277,67 @@ class TelaDashboard(ctk.CTkFrame):
         for k in (self.k_fat, self.k_docs, self.k_cli, self.k_ticket, self.k_meta):
             k.pack(side="left", fill="both", expand=True, padx=4)
 
+        # Barra de configuração de meta
+        meta_bar = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=8,
+                                 border_width=1, border_color=C["card_border"])
+        meta_bar.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(meta_bar, text="META MENSAL:",
+                     font=ctk.CTkFont(size=10, weight="bold"),
+                     text_color=C["subtext"]).pack(side="left", padx=14, pady=8)
+        self._meta_entry = ctk.CTkEntry(
+            meta_bar, width=160, height=28,
+            fg_color=C["progress_bg"], border_color=C["card_border"],
+            text_color=C["text"], placeholder_text="Ex: 400000",
+        )
+        self._meta_entry.pack(side="left", padx=6, pady=8)
+        self._meta_entry.insert(0, str(int(ALERTAS.get("meta_faturamento_mensal", 400000))))
+        ctk.CTkButton(
+            meta_bar, text="Aplicar", width=80, height=28,
+            fg_color=C["accent_azul"],
+            command=self._aplicar_meta,
+        ).pack(side="left", padx=6, pady=8)
+        self._lbl_meta_status = ctk.CTkLabel(
+            meta_bar, text="", font=ctk.CTkFont(size=10),
+            text_color=C["subtext"],
+        )
+        self._lbl_meta_status.pack(side="left", padx=10, pady=8)
+
+        # Gráficos
         row2 = ctk.CTkFrame(self, fg_color="transparent")
-        row2.pack(fill="both", expand=True, pady=(0, 10))
+        row2.pack(fill="both", expand=True, pady=(0, 6))
         self.g_diario = Grafico(row2, "Faturamento Diário (30 dias)")
         self.g_diario.pack(side="left", fill="both", expand=True, padx=(0, 6))
         self.g_vend = Grafico(row2, "Top Vendedores do Mês")
         self.g_vend.pack(side="left", fill="both", expand=True)
 
+    def _aplicar_meta(self):
+        raw = self._meta_entry.get().strip().replace(".", "").replace(",", ".")
+        try:
+            nova = float(raw)
+            if nova <= 0:
+                raise ValueError
+        except ValueError:
+            self._lbl_meta_status.configure(text="✗ Valor inválido", text_color=C["accent_verm"])
+            return
+        ALERTAS["meta_faturamento_mensal"] = nova
+        pct = round(self._ultimo_fat / nova * 100, 1) if nova else 0
+        cor = C["success"] if pct >= 100 else C["warning"] if pct >= 70 else C["accent_verm"]
+        self.k_meta.update(f"{pct}%", f"Meta: {_brl0(nova)}", cor=cor)
+        self.k_fat.update(_brl(self._ultimo_fat), f"{pct}% da meta")
+        self._lbl_meta_status.configure(
+            text=f"✓ Meta: {_brl0(nova)}", text_color=C["success"])
+
     def refresh(self, dados: dict):
         fat  = dados.get("faturamento_atual", 0)
-        meta = dados.get("meta_mensal", 400000)
-        pct  = dados.get("pct_meta", 0)
+        meta = ALERTAS.get("meta_faturamento_mensal", 400000)
+        pct  = round(fat / meta * 100, 1) if meta else 0
+        self._ultimo_fat = fat
         cor_meta = C["success"] if pct >= 100 else C["warning"] if pct >= 70 else C["accent_verm"]
-        self.k_fat.update(f"R$ {fat:,.2f}", f"{pct}% da meta")
-        self.k_docs.update(str(dados.get("qtd_documentos", 0)))
-        self.k_cli.update(str(dados.get("clientes_ativos", 0)))
-        self.k_ticket.update(f"R$ {dados.get('ticket_medio', 0):,.2f}")
-        self.k_meta.update(f"{pct}%", f"Meta: R$ {meta:,.0f}", cor=cor_meta)
+        self.k_fat.update(_brl(fat), f"{pct}% da meta")
+        self.k_docs.update(_num(dados.get("qtd_documentos", 0)))
+        self.k_cli.update(_num(dados.get("clientes_ativos", 0)))
+        self.k_ticket.update(_brl(dados.get("ticket_medio", 0)))
+        self.k_meta.update(f"{pct}%", f"Meta: {_brl0(meta)}", cor=cor_meta)
 
         diario = dados.get("faturamento_diario", [])
         if diario:
@@ -235,50 +358,188 @@ class TelaDashboard(ctk.CTkFrame):
 class TelaVendas(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
+        self._plano_vars: dict = {}
         self._build()
+        threading.Thread(target=self._carregar_planos, daemon=True).start()
 
     def _build(self):
+        from datetime import date
+        hoje     = date.today()
+        primeiro = hoje.replace(day=1)
+
+        # ── KPIs (5 cards) ────────────────────────────────────────────
         row1 = ctk.CTkFrame(self, fg_color="transparent")
-        row1.pack(fill="x", pady=(0, 10))
-        self.k_dev = KpiCard(row1, "Total Devoluções", cor=C["accent_verm"])
-        self.k_mar = KpiCard(row1, "Margem Bruta (estimada)", cor=C["success"])
-        for k in (self.k_dev, self.k_mar):
+        row1.pack(fill="x", pady=(0, 6))
+        self.k_fat    = KpiCard(row1, "Faturamento Total",    cor=C["accent_azul"])
+        self.k_qtd    = KpiCard(row1, "Qtde de Vendas")
+        self.k_ticket = KpiCard(row1, "Ticket Médio")
+        self.k_dev    = KpiCard(row1, "Total Devoluções",     cor=C["accent_verm"])
+        self.k_mar    = KpiCard(row1, "Margem Bruta",         cor=C["success"])
+        for k in (self.k_fat, self.k_qtd, self.k_ticket, self.k_dev, self.k_mar):
             k.pack(side="left", fill="both", expand=True, padx=4)
 
+        # ── Filtro por período ─────────────────────────────────────────
+        filtro_bar = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=8,
+                                   border_width=1, border_color=C["card_border"])
+        filtro_bar.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(filtro_bar, text="PERÍODO:",
+                     font=ctk.CTkFont(size=10, weight="bold"),
+                     text_color=C["subtext"]).pack(side="left", padx=14, pady=8)
+        ctk.CTkLabel(filtro_bar, text="De:", text_color=C["subtext"],
+                     font=ctk.CTkFont(size=10)).pack(side="left", padx=(0, 4), pady=8)
+        self._de_entry = ctk.CTkEntry(
+            filtro_bar, width=100, height=28,
+            fg_color=C["progress_bg"], border_color=C["card_border"],
+            text_color=C["text"], placeholder_text="DD/MM/AAAA",
+        )
+        self._de_entry.pack(side="left", padx=(0, 8), pady=8)
+        self._de_entry.insert(0, primeiro.strftime("%d/%m/%Y"))
+        ctk.CTkLabel(filtro_bar, text="Até:", text_color=C["subtext"],
+                     font=ctk.CTkFont(size=10)).pack(side="left", padx=(0, 4), pady=8)
+        self._ate_entry = ctk.CTkEntry(
+            filtro_bar, width=100, height=28,
+            fg_color=C["progress_bg"], border_color=C["card_border"],
+            text_color=C["text"], placeholder_text="DD/MM/AAAA",
+        )
+        self._ate_entry.pack(side="left", padx=(0, 8), pady=8)
+        self._ate_entry.insert(0, hoje.strftime("%d/%m/%Y"))
+        ctk.CTkButton(
+            filtro_bar, text="Buscar", width=80, height=28,
+            fg_color=C["accent_azul"],
+            command=self._buscar_periodo,
+        ).pack(side="left", padx=4, pady=8)
+        self._lbl_periodo = ctk.CTkLabel(
+            filtro_bar, text="Exibindo: este mês (bot automático)",
+            font=ctk.CTkFont(size=10), text_color=C["subtext"],
+        )
+        self._lbl_periodo.pack(side="left", padx=12, pady=8)
+
+        # ── Filtro por plano de venda ──────────────────────────────────
+        plano_bar = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=8,
+                                  border_width=1, border_color=C["card_border"])
+        plano_bar.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(plano_bar, text="PLANO DE VENDA:",
+                     font=ctk.CTkFont(size=10, weight="bold"),
+                     text_color=C["subtext"]).pack(side="left", padx=14, pady=8)
+        self._lbl_plano_status = ctk.CTkLabel(
+            plano_bar, text="carregando planos...",
+            font=ctk.CTkFont(size=10), text_color=C["subtext"])
+        self._lbl_plano_status.pack(side="left", padx=6, pady=8)
+        self._plano_checks_frame = ctk.CTkScrollableFrame(
+            plano_bar, height=44, fg_color="transparent",
+            corner_radius=0, border_width=0, orientation="horizontal")
+        self._plano_checks_frame.pack(side="left", fill="x", expand=True, padx=4, pady=4)
+
+        # ── Gráficos ──────────────────────────────────────────────────
         row2 = ctk.CTkFrame(self, fg_color="transparent")
-        row2.pack(fill="both", expand=True, pady=(0, 10))
-        self.g_marca = Grafico(row2, "Faturamento por Marca")
+        row2.pack(fill="both", expand=True, pady=(0, 8))
+        self.g_marca = Grafico(row2, "Faturamento por Marca (R$)")
         self.g_marca.pack(side="left", fill="both", expand=True, padx=(0, 6))
-        self.g_grupo = Grafico(row2, "Faturamento por Grupo")
+        self.g_grupo = Grafico(row2, "Faturamento por Grupo (R$)")
         self.g_grupo.pack(side="left", fill="both", expand=True)
 
-        _secao(self, "TOP VENDEDORES (MÊS)")
-        self.tab_vend = Tabela(self, ["Vendedor", "total_venda", "qtd_pedidos", "ticket_medio"], height=180)
-        self.tab_vend.pack(fill="x", pady=(0, 10))
+        # ── Tabela de vendedores ───────────────────────────────────────
+        _secao(self, "TOP VENDEDORES — META DISTRIBUÍDA IGUALMENTE")
+        self.tab_vend = Tabela(
+            self,
+            ["Vendedor", "total_venda", "qtd_pedidos", "ticket_medio",
+             "meta_individual", "pct_meta"],
+            height=200,
+        )
+        self.tab_vend.pack(fill="x")
 
-        _secao(self, "DEVOLUÇÕES POR MOTIVO")
-        self.tab_dev = Tabela(self, ["MotivoDevolucao", "Vendedor", "DescrItem", "valor_devolvido", "qtd_devolvida"], height=180)
-        self.tab_dev.pack(fill="x")
+    def _carregar_planos(self):
+        import time as _t
+        for _ in range(15):
+            df = db.mapear_planos()
+            if not df.empty:
+                break
+            _t.sleep(2)
+        if df.empty:
+            self.after(0, lambda: self._lbl_plano_status.configure(
+                text="(planos indisponíveis)", text_color=C["subtext"]))
+            return
+
+        def _criar():
+            self._lbl_plano_status.pack_forget()
+            for _, row in df.iterrows():
+                cod  = row["CodPlanoVnd"]
+                nome = str(row.get("NomePlanoVnd", ""))[:24]
+                var  = ctk.BooleanVar(value=False)
+                self._plano_vars[cod] = var
+                ctk.CTkCheckBox(
+                    self._plano_checks_frame,
+                    text=f"{cod} · {nome}",
+                    variable=var,
+                    text_color=C["text"],
+                    font=ctk.CTkFont(size=10),
+                    checkbox_height=16,
+                    checkbox_width=16,
+                ).pack(side="left", padx=6, pady=4)
+
+        self.after(0, _criar)
+
+    def _buscar_periodo(self):
+        from datetime import datetime as dt2
+        def _parse(s):
+            return dt2.strptime(s.strip(), "%d/%m/%Y").strftime("%Y-%m-%d")
+        try:
+            ini = _parse(self._de_entry.get())
+            fim = _parse(self._ate_entry.get())
+        except ValueError:
+            self._lbl_periodo.configure(
+                text="✗ Data inválida. Use DD/MM/AAAA", text_color=C["accent_verm"])
+            return
+        self._lbl_periodo.configure(
+            text=f"⟳ Buscando {ini} → {fim}...", text_color=C["warning"])
+        planos = [cod for cod, var in self._plano_vars.items() if var.get()]
+        filtro = f"i.DtVnd BETWEEN '{ini}' AND '{fim}'"
+        def task():
+            from bots.analise_bots import BotVendas
+            _bot = BotVendas()
+            dados = _bot.analisar(
+                filtro_data=filtro,
+                planos_filter=planos if planos else None,
+            )
+            de_fmt  = self._de_entry.get().strip()
+            ate_fmt = self._ate_entry.get().strip()
+            self.after(0, lambda: self._lbl_periodo.configure(
+                text=f"Exibindo: {de_fmt} → {ate_fmt}", text_color=C["success"]))
+            self.after(0, lambda: self.refresh(dados))
+        threading.Thread(target=task, daemon=True).start()
 
     def refresh(self, dados: dict):
-        self.k_dev.update(f"R$ {dados.get('total_devolucoes', 0):,.2f}")
-        marcas = dados.get("por_marca", [])
-        margem = sum(float(r.get("margem_bruta", 0) or 0) for r in marcas)
-        self.k_mar.update(f"R$ {margem:,.2f}")
+        self.k_fat.update(_brl(dados.get("faturamento_total", 0)))
+        self.k_qtd.update(_num(dados.get("qtd_vendas", 0)))
+        self.k_ticket.update(_brl(dados.get("ticket_medio", 0)))
+        self.k_dev.update(_brl(dados.get("total_devolucoes", 0)))
+        self.k_mar.update(_brl(dados.get("margem_total", 0)))
 
+        marcas = dados.get("por_marca", [])
         if marcas:
-            lbs = [str(r.get("DescrMarca", "?"))[:12] for r in marcas[:10]]
+            lbs = [str(r.get("DescrMarca", "?"))[:14] for r in marcas[:10]]
             vs  = [float(r.get("faturamento", 0) or 0) for r in marcas[:10]]
-            self.g_marca.barras(lbs, vs)
+            self.g_marca.barras(lbs, vs, fmt_val=_brl)
 
         grupos = dados.get("por_grupo", [])
         if grupos:
-            lbs = [str(r.get("DescrGrpItem", "?"))[:12] for r in grupos[:10]]
+            lbs = [str(r.get("DescrGrpItem", "?"))[:14] for r in grupos[:10]]
             vs  = [float(r.get("faturamento", 0) or 0) for r in grupos[:10]]
-            self.g_grupo.barras(lbs, vs, cor=C["warning"])
+            self.g_grupo.barras(lbs, vs, cor=C["warning"], fmt_val=_brl)
 
-        self.tab_vend.populate(dados.get("por_vendedor", []))
-        self.tab_dev.populate(dados.get("devolucoes", [])[:20])
+        vendedores = dados.get("por_vendedor", [])
+        if vendedores:
+            n        = len(vendedores)
+            meta_tot = ALERTAS.get("meta_faturamento_mensal", 400000)
+            meta_ind = meta_tot / n if n else 0
+            tabela   = []
+            for r in vendedores:
+                fat = float(r.get("total_venda", 0) or 0)
+                pct = round(fat / meta_ind * 100, 1) if meta_ind else 0
+                tabela.append({**r,
+                                "meta_individual": _brl(meta_ind),
+                                "pct_meta":        f"{pct}%"})
+            self.tab_vend.populate(tabela)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -287,48 +548,157 @@ class TelaVendas(ctk.CTkFrame):
 class TelaEstoque(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
+        self._criticos_dados: list = []
         self._build()
 
     def _build(self):
+        # ── KPIs ──────────────────────────────────────────────────────
         row1 = ctk.CTkFrame(self, fg_color="transparent")
-        row1.pack(fill="x", pady=(0, 10))
+        row1.pack(fill="x", pady=(0, 8))
         self.k_itens = KpiCard(row1, "Total Itens")
         self.k_valor = KpiCard(row1, "Valor em Estoque", cor=C["accent_azul"])
-        self.k_zero  = KpiCard(row1, "Itens Zerados", cor=C["accent_verm"])
-        self.k_giro  = KpiCard(row1, f"Sem Giro +90d", cor=C["warning"])
+        self.k_zero  = KpiCard(row1, "Itens Zerados",    cor=C["accent_verm"])
+        self.k_giro  = KpiCard(row1, "Sem Giro +90d",    cor=C["warning"])
         for k in (self.k_itens, self.k_valor, self.k_zero, self.k_giro):
             k.pack(side="left", fill="both", expand=True, padx=4)
 
-        row2 = ctk.CTkFrame(self, fg_color="transparent")
-        row2.pack(fill="both", expand=True, pady=(0, 10))
-        self.g_marca = Grafico(row2, "Valor em Estoque por Marca")
+        # ── Abas de análise ───────────────────────────────────────────
+        self._tabs = ctk.CTkTabview(
+            self,
+            fg_color=C["card"],
+            segmented_button_fg_color=C["sidebar"],
+            segmented_button_selected_color=C["accent_azul"],
+            segmented_button_unselected_color=C["sidebar"],
+            segmented_button_selected_hover_color=C["accent_azul"],
+            text_color=C["text"],
+        )
+        self._tabs.pack(fill="both", expand=True, pady=(0, 8))
+
+        # Aba 1 — Visão Geral
+        t1 = self._tabs.add("Visão Geral")
+        row_t1 = ctk.CTkFrame(t1, fg_color="transparent")
+        row_t1.pack(fill="both", expand=True)
+        self.g_marca = Grafico(row_t1, "Valor em Estoque por Marca (R$)")
         self.g_marca.pack(side="left", fill="both", expand=True, padx=(0, 6))
-        self.g_mov   = Grafico(row2, "Movimentação (30 dias)")
+        self.g_mov   = Grafico(row_t1, "Saídas por Item — 30 dias (qtd)")
         self.g_mov.pack(side="left", fill="both", expand=True)
 
+        # Aba 2 — Venda × Estoque
+        t2 = self._tabs.add("Venda × Estoque")
+        self.g_venda_estq = Grafico(t2, "Qtd Vendida (90d) vs Estoque Disponível — Top 15")
+        self.g_venda_estq.pack(fill="both", expand=True)
+
+        # Aba 3 — Orç × Estoque
+        t3 = self._tabs.add("Orc × Estoque")
+        self.g_orc_estq = Grafico(t3, "Qtd Orçada (mês atual) vs Estoque Disponível — Top 15")
+        self.g_orc_estq.pack(fill="both", expand=True)
+
+        # Aba 4 — Venda × Compra
+        t4 = self._tabs.add("Venda × Compra")
+        self.g_venda_compra = Grafico(t4, "Saídas (vendas) vs Entradas (compras) — 30 dias")
+        self.g_venda_compra.pack(fill="both", expand=True)
+
+        # Aba 5 — Média Semanal
+        t5 = self._tabs.add("Média Semanal")
+        _secao(t5, "Média de Venda Semanal por Item — últimos 90 dias")
+        self.tab_media = Tabela(
+            t5,
+            ["CodItem", "DescrItem", "DescrMarca", "media_semanal", "QtdEstqDisp", "semanas_cobertura"],
+            height=300,
+        )
+        self.tab_media.pack(fill="both", expand=True)
+
+        # ── Itens críticos com filtro ─────────────────────────────────
         _secao(self, "ITENS CRÍTICOS (sem giro ou zerados)")
-        self.tab_crit = Tabela(self, ["DescrItem", "DescrMarca", "QtdeEstqDisp", "DiasSemVnd", "VlrEstq", "FornecUltCmp"], height=220)
+
+        filtro_row = ctk.CTkFrame(self, fg_color="transparent")
+        filtro_row.pack(fill="x", pady=(2, 6))
+        ctk.CTkLabel(filtro_row, text="Filtrar:",
+                     text_color=C["subtext"],
+                     font=ctk.CTkFont(size=11)).pack(side="left", padx=(0, 6))
+        self._filtro_var = ctk.StringVar()
+        self._filtro_var.trace_add("write", lambda *_: self._aplicar_filtro())
+        ctk.CTkEntry(
+            filtro_row,
+            textvariable=self._filtro_var,
+            placeholder_text="Pesquisar por descrição, marca ou código...",
+            width=340, height=28,
+            fg_color=C["card"],
+            border_color=C["card_border"],
+            text_color=C["text"],
+        ).pack(side="left")
+
+        self.tab_crit = Tabela(
+            self,
+            ["CodItem", "DescrItem", "DescrMarca", "QtdEstq", "QtdEstqDisp",
+             "DiasSemVnd", "VlrEstq", "FornecUltCmp"],
+            height=200,
+        )
         self.tab_crit.pack(fill="x")
+
+    def _aplicar_filtro(self):
+        termo = self._filtro_var.get().strip().lower()
+        dados = self._criticos_dados
+        if termo:
+            dados = [
+                r for r in dados
+                if termo in str(r.get("DescrItem",  "")).lower()
+                or termo in str(r.get("DescrMarca", "")).lower()
+                or termo in str(r.get("CodItem",    "")).lower()
+            ]
+        self.tab_crit.populate(dados[:100])
 
     def refresh(self, dados: dict):
         self.k_itens.update(str(dados.get("total_itens", 0)))
-        self.k_valor.update(f"R$ {dados.get('valor_total_estoque', 0):,.2f}")
+        self.k_valor.update(_brl(dados.get("valor_total_estoque", 0)))
         self.k_zero.update(str(dados.get("itens_zerados", 0)))
         self.k_giro.update(str(dados.get("itens_sem_giro", 0)))
 
+        # Aba 1 — Visão Geral
         marcas = dados.get("por_marca", [])
         if marcas:
-            lbs = [str(r.get("DescrMarca", "?"))[:12] for r in marcas[:10]]
+            lbs = [str(r.get("DescrMarca", "?"))[:14] for r in marcas[:10]]
             vs  = [float(r.get("valor_estoque", 0) or 0) for r in marcas[:10]]
-            self.g_marca.barras(lbs, vs, cor=C["accent_azul"], horizontal=True)
+            self.g_marca.barras(lbs, vs, cor=C["accent_azul"], horizontal=True, fmt_val=_brl)
 
         mov = dados.get("movimentacao", [])
         if mov:
-            lbs = [str(r.get("DescrItem", "?"))[:10] for r in mov[:10]]
+            lbs = [str(r.get("DescrItem", "?"))[:12] for r in mov[:10]]
             vs  = [float(r.get("saidas", 0) or 0) for r in mov[:10]]
             self.g_mov.barras(lbs, vs, cor=C["success"])
 
-        self.tab_crit.populate(dados.get("criticos", [])[:50])
+        # Aba 2 — Venda × Estoque
+        ve = dados.get("venda_estoque", [])
+        if ve:
+            lbs   = [str(r.get("DescrItem", r.get("CodItem", "?")))[:14] for r in ve[:15]]
+            vs_vd = [float(r.get("qtd_vendida_90d", 0) or 0) for r in ve[:15]]
+            vs_eq = [float(r.get("QtdEstqDisp",     0) or 0) for r in ve[:15]]
+            self.g_venda_estq.barras_agrupadas(lbs, {"Vendido 90d": vs_vd, "Estq Disp": vs_eq})
+
+        # Aba 3 — Orç × Estoque
+        oe = dados.get("orc_estoque", [])
+        if oe:
+            lbs   = [str(r.get("DescrItem", r.get("CodItem", "?")))[:14] for r in oe[:15]]
+            vs_oc = [float(r.get("qtd_orcada",  0) or 0) for r in oe[:15]]
+            vs_eq = [float(r.get("QtdEstqDisp", 0) or 0) for r in oe[:15]]
+            self.g_orc_estq.barras_agrupadas(lbs, {"Orçado (mês)": vs_oc, "Estq Disp": vs_eq})
+
+        # Aba 4 — Venda × Compra
+        vc = dados.get("venda_compra", [])
+        if vc:
+            lbs   = [str(r.get("DescrItem", "?"))[:14] for r in vc[:15]]
+            vs_sa = [float(r.get("saidas",   0) or 0) for r in vc[:15]]
+            vs_en = [float(r.get("entradas", 0) or 0) for r in vc[:15]]
+            self.g_venda_compra.barras_agrupadas(lbs, {"Saídas": vs_sa, "Entradas": vs_en})
+
+        # Aba 5 — Média Semanal
+        ms = dados.get("media_semanal", [])
+        if ms:
+            self.tab_media.populate(ms[:100])
+
+        # Itens críticos
+        self._criticos_dados = dados.get("criticos", [])
+        self._aplicar_filtro()
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -362,13 +732,13 @@ class TelaFinanceiro(ctk.CTkFrame):
         self.tab_inad.pack(fill="both", expand=True)
 
     def refresh(self, dados: dict):
-        self.k_rec.update(f"R$ {dados.get('recebido_mes', 0):,.2f}")
-        self.k_atra.update(f"R$ {dados.get('em_atraso', 0):,.2f}",
-                           f"{dados.get('titulos_atrasados', 0)} títulos")
-        self.k_venc.update(f"R$ {dados.get('a_vencer', 0):,.2f}")
+        self.k_rec.update(_brl(dados.get("recebido_mes", 0)))
+        self.k_atra.update(_brl(dados.get("em_atraso", 0)),
+                           f"{_num(dados.get('titulos_atrasados', 0))} títulos")
+        self.k_venc.update(_brl(dados.get("a_vencer", 0)))
         self.k_pmr.update(f"{dados.get('prazo_medio_receb', 0)} dias")
-        self.k_inad.update(f"R$ {dados.get('total_inadimplencia', 0):,.2f}",
-                           f"{dados.get('qtd_inadimplentes', 0)} clientes")
+        self.k_inad.update(_brl(dados.get("total_inadimplencia", 0)),
+                           f"{_num(dados.get('qtd_inadimplentes', 0))} clientes")
 
         tipos = dados.get("por_tipo_recebimento", [])
         if tipos:
@@ -390,10 +760,12 @@ class TelaCRM(ctk.CTkFrame):
     def _build(self):
         row1 = ctk.CTkFrame(self, fg_color="transparent")
         row1.pack(fill="x", pady=(0, 10))
-        self.k_conv  = KpiCard(row1, "Taxa de Conversão", cor=C["success"])
-        self.k_risco = KpiCard(row1, "Clientes em Risco",  cor=C["warning"])
-        self.k_inat  = KpiCard(row1, "Inativos",           cor=C["accent_verm"])
-        for k in (self.k_conv, self.k_risco, self.k_inat):
+        self.k_vorc  = KpiCard(row1, "Valor Orçado (mês)",     cor=C["warning"])
+        self.k_vcvt  = KpiCard(row1, "Valor Convertido (mês)", cor=C["success"])
+        self.k_conv  = KpiCard(row1, "Taxa de Conversão",      cor=C["accent_azul"])
+        self.k_risco = KpiCard(row1, "Clientes em Risco",      cor=C["warning"])
+        self.k_inat  = KpiCard(row1, "Inativos",               cor=C["accent_verm"])
+        for k in (self.k_vorc, self.k_vcvt, self.k_conv, self.k_risco, self.k_inat):
             k.pack(side="left", fill="both", expand=True, padx=4)
 
         row2 = ctk.CTkFrame(self, fg_color="transparent")
@@ -412,11 +784,13 @@ class TelaCRM(ctk.CTkFrame):
         self.tab_inat.pack(fill="x")
 
     def refresh(self, dados: dict):
+        self.k_vorc.update(_brl(dados.get("valor_orcado", 0)))
+        self.k_vcvt.update(_brl(dados.get("valor_convertido", 0)))
         pct = dados.get("taxa_conversao_pct", 0)
         cor = C["success"] if pct >= 50 else C["warning"] if pct >= 25 else C["accent_verm"]
         orc = dados.get("total_orcamentos", 0)
         cvt = dados.get("total_convertidos", 0)
-        self.k_conv.update(f"{pct}%", subtitulo=f"{cvt} de {orc} orçamentos", cor=cor)
+        self.k_conv.update(f"{pct}%", subtitulo=f"{_num(cvt)} de {_num(orc)} orçamentos", cor=cor)
         self.k_risco.update(str(dados.get("qtd_em_risco", 0)))
         self.k_inat.update(str(dados.get("qtd_inativos", 0)))
 
@@ -497,6 +871,7 @@ class ERPDashboard(ctk.CTk):
         self.geometry("1380x860")
         self.minsize(1100, 700)
         self.configure(fg_color=C["bg"])
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.bot_manager = BotManager()
         self._telas: dict[str, ctk.CTkFrame] = {}
@@ -534,6 +909,19 @@ class ERPDashboard(ctk.CTk):
             btn.pack(padx=10, pady=2)
             self._sidebar_btns[nome] = btn
 
+        ctk.CTkFrame(self._sidebar, fg_color="transparent").pack(fill="y", expand=True)
+        ctk.CTkButton(
+            self._sidebar,
+            text="  ✕  Sair",
+            anchor="w",
+            width=180, height=38,
+            fg_color=C["accent_verm"],
+            hover_color="#b91c1c",
+            text_color=C["text"],
+            font=ctk.CTkFont(size=13),
+            command=self.on_close,
+        ).pack(padx=10, pady=(2, 16))
+
         # Área de conteúdo
         content_wrap = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
         content_wrap.pack(side="left", fill="both", expand=True)
@@ -563,13 +951,17 @@ class ERPDashboard(ctk.CTk):
         self._frame_telas.pack(fill="both", expand=True, padx=12, pady=10)
 
         # Footer
-        footer = ctk.CTkFrame(content_wrap, fg_color=C["card"], height=36, corner_radius=0)
+        footer = ctk.CTkFrame(content_wrap, fg_color=C["card"], height=52, corner_radius=0)
         footer.pack(fill="x", side="bottom")
         footer.pack_propagate(False)
         self._lbl_bots = ctk.CTkLabel(footer, text="Bots: aguardando conexão...",
                                        font=ctk.CTkFont(size=10),
                                        text_color=C["subtext"])
-        self._lbl_bots.pack(side="left", padx=16, pady=8)
+        self._lbl_bots.pack(side="left", padx=16, pady=(6, 0))
+        self._lbl_erros = ctk.CTkLabel(footer, text="",
+                                        font=ctk.CTkFont(size=10),
+                                        text_color=C["accent_verm"])
+        self._lbl_erros.pack(side="left", padx=16, pady=(0, 6))
 
         # Cria telas (não visíveis ainda)
         self._telas = {
@@ -604,18 +996,33 @@ class ERPDashboard(ctk.CTk):
     def _connect_and_start(self):
         def task():
             ok = db.connect()
-            if ok:
-                self._lbl_status.configure(text="● Conectado", text_color=C["success"])
-                self._register_callbacks()
-                self.bot_manager.start_all()
-            else:
-                self._lbl_status.configure(
-                    text=f"● Erro — DSN: {DB_CONFIG['dsn']}", text_color=C["accent_verm"])
+            if not ok:
+                self.after(0, lambda: self._lbl_status.configure(
+                    text=f"● Erro — DSN: {DB_CONFIG['dsn']}", text_color=C["accent_verm"]))
                 self.after(0, lambda: messagebox.showerror(
                     "Erro de Conexão",
                     f"Não foi possível conectar via DSN '{DB_CONFIG['dsn']}'.\n"
                     "Verifique usuário/senha em config/settings.py",
                 ))
+                return
+
+            # Testa acesso real ao banco Blue antes de iniciar os bots
+            df_test = db.query("SELECT TOP 1 NrDoc FROM Blue.dbo.vmVndDoc")
+            if df_test.empty and db.last_error:
+                msg = f"● Conectado | Blue inacessível: {db.last_error[:60]}"
+                self.after(0, lambda m=msg: self._lbl_status.configure(
+                    text=m, text_color=C["warning"]))
+                self.after(0, lambda: messagebox.showwarning(
+                    "Aviso de Acesso",
+                    f"Conexão estabelecida, mas a query de teste falhou:\n\n{db.last_error}\n\n"
+                    "Verifique se o DSN aponta para o banco correto e se o usuário tem permissão.",
+                ))
+            else:
+                self.after(0, lambda: self._lbl_status.configure(
+                    text="● Conectado ao Blue", text_color=C["success"]))
+
+            self._register_callbacks()
+            self.bot_manager.start_all()
 
         threading.Thread(target=task, daemon=True).start()
 
@@ -641,10 +1048,14 @@ class ERPDashboard(ctk.CTk):
     def _update_status(self):
         status = self.bot_manager.get_status()
         partes = []
+        erros = []
         for nome, s in status.items():
             ico = "✓" if s["status"] == "ok" else "⟳" if s["status"] == "executando" else "✗"
             partes.append(f"{ico} {nome.capitalize()} {s['ultimo_update']}")
+            if s.get("erro_msg"):
+                erros.append(f"[{nome}] {s['erro_msg'][:70]}")
         self._lbl_bots.configure(text="  |  ".join(partes))
+        self._lbl_erros.configure(text=erros[0] if erros else "")
 
     def _tick_hora(self):
         self._lbl_hora.configure(text=datetime.now().strftime("%d/%m/%Y  %H:%M:%S"))

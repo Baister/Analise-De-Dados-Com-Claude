@@ -18,6 +18,7 @@ class DatabaseManager:
     def __init__(self):
         self._conn = None
         self._last_ping = 0
+        self.last_error: str = ""
 
     def _build_conn_str(self) -> str:
         c = DB_CONFIG
@@ -76,13 +77,24 @@ class DatabaseManager:
             if not self.ensure_connected():
                 return pd.DataFrame()
             try:
-                df = pd.read_sql(sql, self._conn, params=params)
+                cursor = self._conn.cursor()
+                if params is not None:
+                    cursor.execute(sql, params)
+                else:
+                    cursor.execute(sql)
+                if cursor.description is None:
+                    return pd.DataFrame()
+                cols = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                df = pd.DataFrame([list(r) for r in rows], columns=cols)
                 max_rows = ALERTAS.get("query_max_rows", 5000)
                 if len(df) > max_rows:
                     df = df.head(max_rows)
+                self.last_error = ""
                 return df
             except Exception as e:
-                logger.error("Erro na query: %s", e)
+                self.last_error = str(e)
+                logger.error("Erro na query: %s\n→ SQL: %.400s", e, sql.strip())
                 self._conn = None
                 return pd.DataFrame()
 

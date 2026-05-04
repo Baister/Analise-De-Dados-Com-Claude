@@ -17,6 +17,8 @@ MAX          = ALERTAS.get("query_max_rows", 5000)
 DIAS_RISCO   = ALERTAS.get("cliente_em_risco_dias", 60)
 DIAS_INATIVO = ALERTAS.get("cliente_inativo_dias", 90)
 DIAS_CRITICO = ALERTAS.get("estoque_critico_dias_sem_vnd", 90)
+_MES_INI     = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)"
+_MES_FIM     = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)"
 
 
 def _safe_float(df: pd.DataFrame, col: str) -> float:
@@ -41,6 +43,7 @@ class BaseBot(threading.Thread):
         self.status          = "aguardando"
         self._stop           = threading.Event()
         self.callbacks: list = []
+        self.erro_msg: str   = ""
 
     def stop(self):
         self._stop.set()
@@ -63,9 +66,11 @@ class BaseBot(threading.Thread):
             try:
                 self.resultado = self.analisar()
                 self.status = "ok"
+                self.erro_msg = ""
             except Exception as e:
                 logger.error("Bot [%s] erro: %s", self.name_label, e)
                 self.status = "erro"
+                self.erro_msg = str(e)
             self._notify()
             for _ in range(max(1, self.interval // 5)):
                 if self._stop.is_set():
@@ -92,8 +97,8 @@ class BotDashboard(BaseBot):
                 AVG(v.ValVndTotal)        AS ticket_medio
             FROM Blue.dbo.vmVndDoc v
             INNER JOIN Blue.dbo.vwVndDoc d ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE MONTH(v.DtVnd) = MONTH(GETDATE())
-              AND YEAR(v.DtVnd)  = YEAR(GETDATE())
+            WHERE v.DtVnd >= {_MES_INI}
+              AND v.DtVnd <  {_MES_FIM}
               AND d.Cancelado    = ''
               AND d.Fat          = 1
         """)
@@ -107,8 +112,8 @@ class BotDashboard(BaseBot):
                 AVG(v.ValVndTotal)      AS ticket_medio
             FROM Blue.dbo.vmVndDoc v
             INNER JOIN Blue.dbo.vwVndDoc d ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE MONTH(v.DtVnd) = MONTH(GETDATE())
-              AND YEAR(v.DtVnd)  = YEAR(GETDATE())
+            WHERE v.DtVnd >= {_MES_INI}
+              AND v.DtVnd <  {_MES_FIM}
               AND d.Cancelado = ''
               AND d.Fat = 1
             GROUP BY v.Vendedor, v.CodVend
@@ -151,7 +156,40 @@ class BotVendas(BaseBot):
     def __init__(self):
         super().__init__("vendas")
 
-    def analisar(self) -> dict:
+    def analisar(self, filtro_data: str = "", planos_filter: list = None) -> dict:
+        """filtro_data: fragmento SQL para WHERE de data. Vazio = mês atual.
+        planos_filter: lista de CodPlanoVnd para filtrar (None = todos)."""
+        if not filtro_data:
+            filtro_data = (
+                f"i.DtVnd >= {_MES_INI}"
+                f" AND i.DtVnd < {_MES_FIM}"
+            )
+        filtro_v = filtro_data.replace("i.DtVnd", "v.DtVnd")
+        filtro_d = filtro_data.replace("i.DtVnd", "dev.DtVnd")
+        if planos_filter:
+            _pl = ",".join(str(int(p)) for p in planos_filter)
+            filtro_plano_v = f"AND v.CodPlanoVnd IN ({_pl})"
+            filtro_plano_i = (
+                f"AND EXISTS (SELECT 1 FROM Blue.dbo.vmVndDoc vv"
+                f" WHERE vv.NrDoc = i.NrDoc AND vv.NSUDoc = i.NSUDoc"
+                f" AND vv.CodPlanoVnd IN ({_pl}))"
+            )
+        else:
+            filtro_plano_v = ""
+            filtro_plano_i = ""
+
+        df_kpi = db.query(f"""
+            SELECT
+                SUM(v.ValVndTotal)        AS faturamento_total,
+                COUNT(DISTINCT v.NrDoc)   AS qtd_vendas,
+                AVG(v.ValVndTotal)        AS ticket_medio
+            FROM Blue.dbo.vmVndDoc v
+            INNER JOIN Blue.dbo.vwVndDoc d ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE d.Cancelado = '' AND d.Fat = 1
+              AND {filtro_v}
+              {filtro_plano_v}
+        """)
+
         df_marca = db.query(f"""
             SELECT TOP 20
                 i.CodMarca,
@@ -162,10 +200,9 @@ class BotVendas(BaseBot):
                 SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem)  AS margem_bruta
             FROM Blue.dbo.vmVndItemDoc i
             INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
-            WHERE MONTH(i.DtVnd) = MONTH(GETDATE())
-              AND YEAR(i.DtVnd)  = YEAR(GETDATE())
-              AND d.Cancelado = ''
-              AND i.Fat = 1
+            WHERE d.Cancelado = '' AND i.Fat = 1
+              AND {filtro_data}
+              {filtro_plano_i}
             GROUP BY i.CodMarca, i.DescrMarca
             ORDER BY faturamento DESC
         """)
@@ -178,27 +215,17 @@ class BotVendas(BaseBot):
                 SUM(i.QtdItem)         AS quantidade
             FROM Blue.dbo.vmVndItemDoc i
             INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
-            WHERE MONTH(i.DtVnd) = MONTH(GETDATE())
-              AND YEAR(i.DtVnd)  = YEAR(GETDATE())
-              AND d.Cancelado = ''
-              AND i.Fat = 1
+            WHERE d.Cancelado = '' AND i.Fat = 1
+              AND {filtro_data}
+              {filtro_plano_i}
             GROUP BY i.CodGrpItem, i.DescrGrpItem
             ORDER BY faturamento DESC
         """)
 
         df_dev = db.query(f"""
-            SELECT TOP {MAX}
-                dev.MotivoDevolucao,
-                dev.Vendedor,
-                dev.DescrItem,
-                SUM(dev.QtdeItemDev) AS qtd_devolvida,
-                SUM(dev.ValTotItem)  AS valor_devolvido,
-                COUNT(*)             AS ocorrencias
+            SELECT SUM(dev.ValTotItem) AS total_devolucoes
             FROM Blue.dbo.vmMetricasMotivoDevItem dev
-            WHERE MONTH(dev.DtVnd) = MONTH(GETDATE())
-              AND YEAR(dev.DtVnd)  = YEAR(GETDATE())
-            GROUP BY dev.MotivoDevolucao, dev.Vendedor, dev.DescrItem
-            ORDER BY valor_devolvido DESC
+            WHERE {filtro_d}
         """)
 
         df_vend = db.query(f"""
@@ -211,22 +238,25 @@ class BotVendas(BaseBot):
                 SUM(v.CustoRepTotal)    AS custo_total
             FROM Blue.dbo.vmVndDoc v
             INNER JOIN Blue.dbo.vwVndDoc d ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE MONTH(v.DtVnd) = MONTH(GETDATE())
-              AND YEAR(v.DtVnd)  = YEAR(GETDATE())
-              AND d.Cancelado = ''
-              AND d.Fat = 1
+            WHERE d.Cancelado = '' AND d.Fat = 1
+              AND {filtro_v}
+              {filtro_plano_v}
             GROUP BY v.Vendedor, v.CodVend
             ORDER BY total_venda DESC
         """)
 
-        total_dev = float(df_dev["valor_devolvido"].sum()) if not df_dev.empty else 0.0
+        margem = sum(float(r.get("margem_bruta", 0) or 0)
+                     for r in df_marca.to_dict("records"))
 
         return {
-            "por_marca":        df_marca.to_dict("records"),
-            "por_grupo":        df_grupo.to_dict("records"),
-            "devolucoes":       df_dev.head(20).to_dict("records"),
-            "total_devolucoes": total_dev,
-            "por_vendedor":     df_vend.to_dict("records"),
+            "faturamento_total": _safe_float(df_kpi, "faturamento_total"),
+            "qtd_vendas":        _safe_int(df_kpi, "qtd_vendas"),
+            "ticket_medio":      _safe_float(df_kpi, "ticket_medio"),
+            "margem_total":      margem,
+            "total_devolucoes":  _safe_float(df_dev, "total_devolucoes"),
+            "por_marca":         df_marca.to_dict("records"),
+            "por_grupo":         df_grupo.to_dict("records"),
+            "por_vendedor":      df_vend.to_dict("records"),
         }
 
 
@@ -240,12 +270,13 @@ class BotEstoque(BaseBot):
     def analisar(self) -> dict:
         df_resumo = db.query(f"""
             SELECT
-                COUNT(*)                     AS total_itens,
-                SUM(VlrEstq)                 AS valor_total_estoque,
-                SUM(QtdEstq)                AS qtd_total,
-                SUM(QtdEstqDisp)            AS qtd_disponivel,
-                SUM(CASE WHEN QtdEstqDisp <= 0 THEN 1 ELSE 0 END)        AS itens_zerados,
-                SUM(CASE WHEN DiasSemVnd > {DIAS_CRITICO} THEN 1 ELSE 0 END) AS itens_sem_giro
+                COUNT(*)  AS total_itens,
+                SUM(VlrEstq)      AS valor_total_estoque,
+                SUM(QtdEstq)      AS qtd_total,
+                SUM(QtdEstqDisp)  AS qtd_disponivel,
+                SUM(CASE WHEN QtdEstqDisp <= 0 THEN 1 ELSE 0 END) AS itens_zerados,
+                SUM(CASE WHEN ISNULL(DATEDIFF(day, DtUltVnd, GETDATE()), 9999) > {DIAS_CRITICO}
+                         THEN 1 ELSE 0 END) AS itens_sem_giro
             FROM Blue.dbo.vmAnaliseEstqItem
             WHERE QtdEstq > 0
         """)
@@ -258,25 +289,26 @@ class BotEstoque(BaseBot):
                 e.CodGrpItem,
                 e.QtdEstq,
                 e.QtdEstqDisp,
-                e.DiasSemVnd,
+                ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) AS DiasSemVnd,
                 e.DtUltVnd,
                 e.CustoRepProd,
                 e.VlrEstq,
                 e.QtdPendPedCmp,
                 e.FornecUltCmp
             FROM Blue.dbo.vmAnaliseEstqItem e
-            WHERE e.DiasSemVnd > {DIAS_CRITICO}
+            WHERE ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) > {DIAS_CRITICO}
                OR e.QtdEstqDisp <= 0
-            ORDER BY e.DiasSemVnd DESC, e.VlrEstq DESC
+            ORDER BY ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) DESC,
+                     e.VlrEstq DESC
         """)
 
         df_marca = db.query(f"""
             SELECT TOP 30
                 e.DescrMarca,
-                COUNT(*)           AS qtd_itens,
-                SUM(e.VlrEstq)     AS valor_estoque,
-                AVG(e.DiasSemVnd)  AS media_dias_sem_venda,
-                SUM(e.QtdEstq)    AS quantidade_total
+                COUNT(*)                                                       AS qtd_itens,
+                SUM(e.VlrEstq)                                                 AS valor_estoque,
+                AVG(ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999))        AS media_dias_sem_venda,
+                SUM(e.QtdEstq)                                                 AS quantidade_total
             FROM Blue.dbo.vmAnaliseEstqItem e
             GROUP BY e.DescrMarca
             ORDER BY valor_estoque DESC
@@ -295,6 +327,96 @@ class BotEstoque(BaseBot):
             ORDER BY saidas DESC
         """)
 
+        # ── Venda × Estoque por item (90 dias) ───────────────────────
+        df_venda_estq = db.query(f"""
+            SELECT TOP 30
+                e.CodItem,
+                e.DescrItem,
+                e.DescrMarca,
+                e.QtdEstq,
+                e.QtdEstqDisp,
+                e.VlrEstq,
+                ISNULL(v.qtd_vendida_90d, 0) AS qtd_vendida_90d,
+                ISNULL(v.val_vendido_90d,  0) AS val_vendido_90d
+            FROM Blue.dbo.vmAnaliseEstqItem e
+            LEFT JOIN (
+                SELECT i.CodItem,
+                       SUM(i.QtdItem)         AS qtd_vendida_90d,
+                       SUM(i.PrecoVndTotItem) AS val_vendido_90d
+                FROM Blue.dbo.vmVndItemDoc i
+                INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+                WHERE d.Cancelado = '' AND i.Fat = 1
+                  AND i.DtVnd >= DATEADD(day, -90, GETDATE())
+                GROUP BY i.CodItem
+            ) v ON e.CodItem = v.CodItem
+            WHERE e.QtdEstq > 0
+            ORDER BY ISNULL(v.qtd_vendida_90d, 0) DESC
+        """)
+
+        # ── Orçamento × Estoque por item (mês atual) ─────────────────
+        df_orc_estq = db.query(f"""
+            SELECT TOP 30
+                e.CodItem,
+                e.DescrItem,
+                e.DescrMarca,
+                e.QtdEstqDisp,
+                ISNULL(o.qtd_orcada, 0) AS qtd_orcada,
+                ISNULL(o.val_orcado,  0) AS val_orcado
+            FROM Blue.dbo.vmAnaliseEstqItem e
+            LEFT JOIN (
+                SELECT i.CodItem,
+                       SUM(i.QtdItem)         AS qtd_orcada,
+                       SUM(i.PrecoVndTotItem) AS val_orcado
+                FROM Blue.dbo.TbOrcPedVnd p
+                INNER JOIN Blue.dbo.vmVndItemDoc i ON p.NrOrcPedVnd = i.NrDoc
+                WHERE p.OrcPedVnd = 1
+                  AND p.DtOrcPedVnd >= {_MES_INI}
+                  AND p.DtOrcPedVnd <  {_MES_FIM}
+                GROUP BY i.CodItem
+            ) o ON e.CodItem = o.CodItem
+            WHERE ISNULL(o.qtd_orcada, 0) > 0
+            ORDER BY qtd_orcada DESC
+        """)
+
+        # ── Venda × Compra (30 dias, via movimentação) ───────────────
+        df_venda_compra = db.query(f"""
+            SELECT TOP 30
+                m.CodItem,
+                m.DescrItem,
+                SUM(m.QtdSaida)   AS saidas,
+                SUM(m.QtdEntrada) AS entradas
+            FROM Blue.dbo.vmItemMovEstq m
+            WHERE m.DtMovEstq >= DATEADD(day, -30, GETDATE())
+            GROUP BY m.CodItem, m.DescrItem
+            HAVING SUM(m.QtdSaida) > 0 OR SUM(m.QtdEntrada) > 0
+            ORDER BY saidas DESC
+        """)
+
+        # ── Média venda semanal por item (90 dias) ───────────────────
+        df_media_semanal = db.query(f"""
+            SELECT TOP {MAX}
+                i.CodItem,
+                MAX(e.DescrItem)   AS DescrItem,
+                MAX(e.DescrMarca)  AS DescrMarca,
+                SUM(i.QtdItem)                                        AS total_90d,
+                CAST(SUM(i.QtdItem) AS FLOAT) / (90.0 / 7.0)         AS media_semanal,
+                MAX(ISNULL(e.QtdEstq, 0))                             AS QtdEstq,
+                MAX(ISNULL(e.QtdEstqDisp, 0))                         AS QtdEstqDisp,
+                CASE
+                    WHEN SUM(i.QtdItem) > 0
+                    THEN MAX(ISNULL(e.QtdEstqDisp, 0))
+                         / (CAST(SUM(i.QtdItem) AS FLOAT) / (90.0 / 7.0))
+                    ELSE 999
+                END AS semanas_cobertura
+            FROM Blue.dbo.vmVndItemDoc i
+            INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+            LEFT JOIN Blue.dbo.vmAnaliseEstqItem e ON i.CodItem = e.CodItem
+            WHERE d.Cancelado = '' AND i.Fat = 1
+              AND i.DtVnd >= DATEADD(day, -90, GETDATE())
+            GROUP BY i.CodItem
+            ORDER BY media_semanal DESC
+        """)
+
         return {
             "total_itens":         _safe_int(df_resumo, "total_itens"),
             "valor_total_estoque": _safe_float(df_resumo, "valor_total_estoque"),
@@ -304,6 +426,10 @@ class BotEstoque(BaseBot):
             "criticos":            df_criticos.to_dict("records"),
             "por_marca":           df_marca.to_dict("records"),
             "movimentacao":        df_mov.head(50).to_dict("records"),
+            "venda_estoque":       df_venda_estq.to_dict("records"),
+            "orc_estoque":         df_orc_estq.to_dict("records"),
+            "venda_compra":        df_venda_compra.to_dict("records"),
+            "media_semanal":       df_media_semanal.to_dict("records"),
         }
 
 
@@ -396,8 +522,8 @@ class BotCRM(BaseBot):
                 SUM(CASE WHEN OrcPedVnd = 1 THEN ValTotalOrcPedVnd ELSE 0 END) AS valor_orcado,
                 SUM(CASE WHEN OrcPedVnd = 2 THEN ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido
             FROM Blue.dbo.TbOrcPedVnd
-            WHERE MONTH(DtOrcPedVnd) = MONTH(GETDATE())
-              AND YEAR(DtOrcPedVnd)  = YEAR(GETDATE())
+            WHERE DtOrcPedVnd >= {_MES_INI}
+              AND DtOrcPedVnd <  {_MES_FIM}
         """)
 
         # ── Funil por Vendedor e Marca ────────────────────────────
@@ -412,8 +538,8 @@ class BotCRM(BaseBot):
             FROM Blue.dbo.TbOrcPedVnd o
             INNER JOIN Blue.dbo.vmVndDoc v     ON o.NrOrcPedVnd = v.NrDoc
             INNER JOIN Blue.dbo.vmVndItemDoc i ON o.NrOrcPedVnd = i.NrDoc
-            WHERE MONTH(o.DtOrcPedVnd) = MONTH(GETDATE())
-              AND YEAR(o.DtOrcPedVnd)  = YEAR(GETDATE())
+            WHERE o.DtOrcPedVnd >= {_MES_INI}
+              AND o.DtOrcPedVnd <  {_MES_FIM}
             GROUP BY v.Vendedor, i.DescrMarca
             ORDER BY valor_orcado DESC
         """)
@@ -426,8 +552,8 @@ class BotCRM(BaseBot):
                 COUNT(*)                   AS qtd_documentos,
                 SUM(ValTotalOrcPedVnd)     AS valor_total
             FROM Blue.dbo.TbOrcPedVnd
-            WHERE MONTH(DtOrcPedVnd) = MONTH(GETDATE())
-              AND YEAR(DtOrcPedVnd)  = YEAR(GETDATE())
+            WHERE DtOrcPedVnd >= {_MES_INI}
+              AND DtOrcPedVnd <  {_MES_FIM}
             GROUP BY OrcPedVnd
             ORDER BY OrcPedVnd
         """)
@@ -555,7 +681,11 @@ class BotManager:
 
     def get_status(self) -> dict:
         return {
-            name: {"status": b.status, "ultimo_update": b.ultimo_update}
+            name: {
+                "status":        b.status,
+                "ultimo_update": b.ultimo_update,
+                "erro_msg":      b.erro_msg,
+            }
             for name, b in self.bots.items()
         }
 
