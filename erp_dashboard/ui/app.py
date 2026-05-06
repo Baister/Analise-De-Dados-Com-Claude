@@ -94,9 +94,37 @@ class Grafico(ctk.CTkFrame):
             plt.close(self._fig)
             self._fig = None
 
+    def _figsize(self, default_w=5.5, default_h=3.2):
+        self.update_idletasks()
+        px_w = self.winfo_width()
+        px_h = self.winfo_height()
+        if px_w > 50 and px_h > 60:
+            return max((px_w - 12) / 100, default_w), max((px_h - 40) / 100, 2.0)
+        return default_w, default_h
+
+    def _on_configure(self, event):
+        if not self._fig or not self._canvas or event.width < 20 or event.height < 20:
+            return
+        dpi = self._fig.get_dpi()
+        self._fig.set_size_inches(event.width / dpi, event.height / dpi, forward=False)
+        try:
+            self._fig.tight_layout(pad=1.0)
+        except Exception:
+            pass
+        self._canvas.draw_idle()
+
+    def _attach_canvas(self, fig, canvas):
+        self._fig = fig
+        self._canvas = canvas
+        self._canvas.draw()
+        w = self._canvas.get_tk_widget()
+        w.pack(fill="both", expand=True, padx=6, pady=6)
+        w.bind("<Configure>", self._on_configure, add="+")
+
     def barras(self, labels, valores, cor=C["accent_azul"], horizontal=False, fmt_val=None):
         self._clean()
-        fig, ax = plt.subplots(figsize=(5, 3))
+        fw, fh = self._figsize()
+        fig, ax = plt.subplots(figsize=(fw, fh))
         fig.patch.set_facecolor(C["card"])
         ax.set_facecolor(C["card"])
         _fmt = fmt_val if fmt_val else _num
@@ -125,14 +153,12 @@ class Grafico(ctk.CTkFrame):
                         fontsize=7, color=C["subtext"])
         ax.spines[:].set_visible(False)
         fig.tight_layout(pad=1.0)
-        self._fig = fig
-        self._canvas = FigureCanvasTkAgg(fig, master=self)
-        self._canvas.draw()
-        self._canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
+        self._attach_canvas(fig, FigureCanvasTkAgg(fig, master=self))
 
     def linha(self, labels, valores, cor=C["accent_azul"], label_nome="Realizado"):
         self._clean()
-        fig, ax = plt.subplots(figsize=(5, 3))
+        fw, fh = self._figsize()
+        fig, ax = plt.subplots(figsize=(fw, fh))
         fig.patch.set_facecolor(C["card"])
         ax.set_facecolor(C["card"])
         ax.plot(labels, valores, color=cor, linewidth=2, marker="o", markersize=3, label=label_nome)
@@ -143,16 +169,14 @@ class Grafico(ctk.CTkFrame):
         ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=7)
         ax.legend(fontsize=8, facecolor=C["card"], labelcolor=C["text"])
         fig.tight_layout(pad=1.0)
-        self._fig = fig
-        self._canvas = FigureCanvasTkAgg(fig, master=self)
-        self._canvas.draw()
-        self._canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
+        self._attach_canvas(fig, FigureCanvasTkAgg(fig, master=self))
 
     def donut(self, labels, valores, cores=None):
         self._clean()
         if not cores:
             cores = [C["accent_azul"], C["success"], C["warning"], C["accent_verm"], "#8b5cf6"]
-        fig, ax = plt.subplots(figsize=(4, 3))
+        fw, fh = self._figsize(default_w=4.5, default_h=3.2)
+        fig, ax = plt.subplots(figsize=(fw, fh))
         fig.patch.set_facecolor(C["card"])
         ax.set_facecolor(C["card"])
         wedges, texts, autotexts = ax.pie(
@@ -167,10 +191,7 @@ class Grafico(ctk.CTkFrame):
                   ncol=2, fontsize=7, facecolor=C["card"], labelcolor=C["text"],
                   framealpha=0)
         fig.tight_layout(pad=0.5)
-        self._fig = fig
-        self._canvas = FigureCanvasTkAgg(fig, master=self)
-        self._canvas.draw()
-        self._canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
+        self._attach_canvas(fig, FigureCanvasTkAgg(fig, master=self))
 
     def barras_agrupadas(self, labels, series: dict):
         """series = {"Série A": [v1, v2, ...], "Série B": [v1, v2, ...]}"""
@@ -180,7 +201,8 @@ class Grafico(ctk.CTkFrame):
         n_series = len(series)
         if n_grupos == 0 or n_series == 0:
             return
-        fig, ax = plt.subplots(figsize=(max(5, n_grupos * 0.9), 3.5))
+        fw, fh = self._figsize(default_w=min(max(6.0, n_grupos * 0.5), 9.0), default_h=3.5)
+        fig, ax = plt.subplots(figsize=(fw, fh))
         fig.patch.set_facecolor(C["card"])
         ax.set_facecolor(C["card"])
         x       = np.arange(n_grupos)
@@ -203,10 +225,7 @@ class Grafico(ctk.CTkFrame):
         ax.spines[:].set_visible(False)
         ax.legend(fontsize=8, facecolor=C["card"], labelcolor=C["text"], loc="upper right")
         fig.tight_layout(pad=1.0)
-        self._fig = fig
-        self._canvas = FigureCanvasTkAgg(fig, master=self)
-        self._canvas.draw()
-        self._canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
+        self._attach_canvas(fig, FigureCanvasTkAgg(fig, master=self))
 
 
 class Tabela(ctk.CTkScrollableFrame):

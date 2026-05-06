@@ -323,9 +323,15 @@ class BotEstoque(BaseBot):
             return
         for tag, view in self._VIEWS.items():
             df = db.query(f"SELECT TOP 0 * FROM {view}")
-            self._s[tag] = list(df.columns) if len(df.columns) > 0 else []
-            logger.info("[Estq] %-4s %s → %s", tag, view.split(".")[-1],
-                        self._s[tag] if self._s[tag] else "(inacessível)")
+            if len(df.columns) > 0:
+                self._s[tag] = list(df.columns)
+            else:
+                # TOP 0 pode falhar em views com erros de compilação — tenta TOP 1 como fallback
+                df1 = db.query(f"SELECT TOP 1 * FROM {view}")
+                self._s[tag] = list(df1.columns) if len(df1.columns) > 0 else []
+            logger.info("[Estq] %-4s %-32s → %s",
+                        tag, view.split(".")[-1],
+                        self._s[tag] if self._s[tag] else "(INACESSÍVEL)")
         self._loaded = True
 
     def _c(self, tag: str, *cands: str) -> str:
@@ -348,17 +354,37 @@ class BotEstoque(BaseBot):
         ev,  et  = self._best("item", "vnd")
         evv, evt = self._best("vnd",  "item")
 
-        col_cod  = self._c(et,  "CodItem",      "Codigo",       "CodigoItem")
-        col_dsc  = self._c(et,  "DescrItem",    "Descricao",    "NomeItem",     "DescrProduto")
-        col_mrc  = self._c(et,  "DescrMarca",   "Marca",        "DescrMarcaItem","NomeMarca")
-        col_qtd  = self._c(et,  "QtdEstq",      "SaldoEstq",    "QtdSaldo",     "Qtd")
-        col_disp = self._c(et,  "QtdEstqDisp",  "SaldoDisp",    "QtdDisp",      "QtdSaldoDisp")
-        col_vlr  = self._c(et,  "VlrEstq",      "ValEstq",      "VlrTotEstq",   "SaldoVlr",  "ValorEstoque")
-        col_cst  = self._c(et,  "CustoRepProd", "CustoRep",     "ValCustoRep",  "CustoReposicao")
-        col_forn = self._c(et,  "FornecUltCmp", "FornecUltima", "CodFornecUlt", "Fornecedor")
-        col_pend = self._c(et,  "QtdPendPedCmp","PendPed",      "QtdPedCmp",    "QtdPendCmp")
-        col_dtv  = (self._c(evt,"DtUltVnd",     "DtUltimaVenda","DtVnd")
-                    or self._c(et,"DtUltVnd",   "DtUltimaVenda","DtVnd"))
+        col_cod  = self._c(et,  "CodItem",       "Codigo",         "CodigoItem",      "CodProduto")
+        col_dsc  = self._c(et,  "DescrItem",     "Descricao",      "NomeItem",        "DescrProduto",
+                                "NomeProduto",   "DescrProd")
+        col_mrc  = self._c(et,  "DescrMarca",    "Marca",          "DescrMarcaItem",  "NomeMarca",
+                                "DescrMarcaProd","MarcaItem")
+        col_qtd  = self._c(et,  "QtdEstq",       "SaldoEstq",      "QtdSaldo",        "Qtd",
+                                "QtdEstoque",    "QtdTotEstq",     "QtdTotalEstq",    "SaldoQtd",
+                                "QtdSaldoEstq",  "QuantidadeEstq", "Quantidade")
+        col_disp = self._c(et,  "QtdEstqDisp",   "SaldoDisp",      "QtdDisp",         "QtdSaldoDisp",
+                                "QtdEstqDisponiveis","QtdDisponivel","QtdEstoqueDisp",  "QtdSaldoDisponivel",
+                                "SaldoDisponivel","QtdDispEstq")
+        col_vlr  = self._c(et,  "VlrEstq",       "ValEstq",        "VlrTotEstq",      "SaldoVlr",
+                                "ValorEstoque",  "VlrTotalEstq",   "ValTotEstq",      "VlrTotal",
+                                "ValorTotal",    "TotVlrEstq",     "VlrEstoque",      "VlrSaldoEstq",
+                                "ValSaldoEstq",  "VlrTotItem",     "ValTotItem")
+        col_cst  = self._c(et,  "CustoRepProd",  "CustoRep",       "ValCustoRep",     "CustoReposicao",
+                                "CustoRepItem",  "VlrCustoRep")
+        col_forn = self._c(et,  "FornecUltCmp",  "FornecUltima",   "CodFornecUlt",    "Fornecedor",
+                                "NomeFornec",    "FornecedorUlt")
+        col_pend = self._c(et,  "QtdPendPedCmp", "PendPed",        "QtdPedCmp",       "QtdPendCmp",
+                                "QtdPendentePed","QtdPendCompra")
+        col_dtv  = (self._c(et,  "DtUltVnd",      "DtUltimaVenda",  "DtVnd",           "UltDtVnd",
+                                "DtUltVenda",    "DataUltVnd",     "DataUltimaVenda", "DtUltimaVnd")
+                    or self._c(evt,"DtUltVnd",   "DtUltimaVenda",  "DtVnd",           "UltDtVnd",
+                                "DtUltVenda",    "DataUltVnd",     "DataUltimaVenda", "DtUltimaVnd"))
+
+        logger.info("[Estq] Cols detectadas: ev=%s | cod='%s' qtd='%s' vlr='%s' disp='%s' dtv='%s'",
+                    ev.split(".")[-1], col_cod, col_qtd, col_vlr, col_disp, col_dtv)
+        if not col_qtd and not col_vlr and not col_disp:
+            logger.warning("[Estq] NENHUMA coluna-chave detectada! Colunas brutas de [%s]: %s",
+                           et, self._s.get(et, []))
 
         smov     = self._s.get("mov", [])
         col_mcod = self._c("mov", "CodItem",      "Codigo")
@@ -409,7 +435,7 @@ class BotEstoque(BaseBot):
         _ov = f"e.{col_vlr} DESC" if col_vlr else "1"
         df_criticos = db.query(f"""
             SELECT TOP {MAX} {", ".join(_cp) if _cp else "e.*"}
-            FROM {evv} e WHERE {_wd} OR {_wz}
+            FROM {ev} e WHERE {_wd} OR {_wz}
             ORDER BY {_od} {_ov}
         """)
 
