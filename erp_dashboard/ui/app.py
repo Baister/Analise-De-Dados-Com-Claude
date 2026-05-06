@@ -257,6 +257,108 @@ def _secao(master, texto: str):
 
 
 # ──────────────────────────────────────────────────────────────────
+#  PLANO DROPDOWN  — seletor multi-plano estilo Power BI
+# ──────────────────────────────────────────────────────────────────
+class PlanoDropdown(ctk.CTkFrame):
+    def __init__(self, master, **kw):
+        super().__init__(master, fg_color="transparent", **kw)
+        self._vars: dict  = {}
+        self._nomes: dict = {}
+        self._popup       = None
+        self._btn = ctk.CTkButton(
+            self, text="Plano de Venda  ▼", width=220, height=30,
+            fg_color=C["progress_bg"], border_color=C["card_border"], border_width=1,
+            hover_color=C["card"], text_color=C["subtext"], font=ctk.CTkFont(size=10),
+            anchor="w", command=self._toggle,
+        )
+        self._btn.pack(side="left")
+
+    def carregar(self, df):
+        for _, r in df.iterrows():
+            cod = r["CodPlanoVnd"]
+            self._nomes[cod] = str(r.get("NomePlanoVnd", ""))
+            self._vars[cod]  = ctk.BooleanVar(value=False)
+
+    def selecionados(self) -> list:
+        return [c for c, v in self._vars.items() if v.get()]
+
+    def _refresh_label(self):
+        sel = self.selecionados()
+        if not sel:
+            self._btn.configure(text="Plano de Venda  ▼", text_color=C["subtext"])
+        else:
+            self._btn.configure(text=f"{len(sel)} plano(s)  ▼", text_color=C["text"])
+
+    def _toggle(self):
+        if self._popup and self._popup.winfo_exists():
+            self._fechar()
+        else:
+            self._abrir()
+
+    def _fechar(self):
+        if self._popup and self._popup.winfo_exists():
+            self._popup.destroy()
+        self._popup = None
+
+    def _abrir(self):
+        self._btn.update_idletasks()
+        x = self._btn.winfo_rootx()
+        y = self._btn.winfo_rooty() + self._btn.winfo_height() + 2
+        pop = ctk.CTkToplevel(self._btn)
+        pop.wm_overrideredirect(True)
+        pop.configure(fg_color=C["card"])
+        pop.geometry(f"280x300+{x}+{y}")
+        pop.attributes("-topmost", True)
+        pop.lift()
+        hdr = ctk.CTkFrame(pop, fg_color=C["sidebar"], corner_radius=0)
+        hdr.pack(fill="x")
+        var_all = ctk.BooleanVar(value=False)
+
+        def _toggle_all():
+            for v in self._vars.values():
+                v.set(var_all.get())
+
+        ctk.CTkCheckBox(
+            hdr, text="Selecionar Todos", variable=var_all, command=_toggle_all,
+            text_color=C["text"], font=ctk.CTkFont(size=10, weight="bold"),
+            checkbox_height=16, checkbox_width=16,
+        ).pack(anchor="w", padx=10, pady=8)
+        ctk.CTkFrame(pop, fg_color=C["card_border"], height=1).pack(fill="x")
+        scroll = ctk.CTkScrollableFrame(pop, fg_color=C["card"])
+        scroll.pack(fill="both", expand=True)
+        for cod, var in self._vars.items():
+            nome = self._nomes.get(cod, "")[:28]
+            ctk.CTkCheckBox(
+                scroll, text=f"{cod}  ·  {nome}", variable=var,
+                text_color=C["text"], font=ctk.CTkFont(size=10),
+                checkbox_height=15, checkbox_width=15,
+            ).pack(anchor="w", padx=8, pady=2)
+        ctk.CTkFrame(pop, fg_color=C["card_border"], height=1).pack(fill="x")
+        btns = ctk.CTkFrame(pop, fg_color=C["sidebar"], corner_radius=0)
+        btns.pack(fill="x")
+
+        def _aplicar():
+            self._refresh_label()
+            self._fechar()
+
+        def _limpar():
+            for v in self._vars.values():
+                v.set(False)
+            var_all.set(False)
+
+        ctk.CTkButton(
+            btns, text="Limpar", width=90, height=28,
+            fg_color="transparent", text_color=C["subtext"],
+            hover_color=C["card"], command=_limpar,
+        ).pack(side="left", padx=8, pady=6)
+        ctk.CTkButton(
+            btns, text="Aplicar", width=90, height=28,
+            fg_color=C["accent_azul"], command=_aplicar,
+        ).pack(side="right", padx=8, pady=6)
+        self._popup = pop
+
+
+# ──────────────────────────────────────────────────────────────────
 #  TELA DASHBOARD
 # ──────────────────────────────────────────────────────────────────
 class TelaDashboard(ctk.CTkFrame):
@@ -358,7 +460,6 @@ class TelaDashboard(ctk.CTkFrame):
 class TelaVendas(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
-        self._plano_vars: dict = {}
         self._build()
         threading.Thread(target=self._carregar_planos, daemon=True).start()
 
@@ -421,14 +522,8 @@ class TelaVendas(ctk.CTkFrame):
         ctk.CTkLabel(plano_bar, text="PLANO DE VENDA:",
                      font=ctk.CTkFont(size=10, weight="bold"),
                      text_color=C["subtext"]).pack(side="left", padx=14, pady=8)
-        self._lbl_plano_status = ctk.CTkLabel(
-            plano_bar, text="carregando planos...",
-            font=ctk.CTkFont(size=10), text_color=C["subtext"])
-        self._lbl_plano_status.pack(side="left", padx=6, pady=8)
-        self._plano_checks_frame = ctk.CTkScrollableFrame(
-            plano_bar, height=44, fg_color="transparent",
-            corner_radius=0, border_width=0, orientation="horizontal")
-        self._plano_checks_frame.pack(side="left", fill="x", expand=True, padx=4, pady=4)
+        self._plano_drop = PlanoDropdown(plano_bar)
+        self._plano_drop.pack(side="left", padx=6, pady=8)
 
         # ── Gráficos ──────────────────────────────────────────────────
         row2 = ctk.CTkFrame(self, fg_color="transparent")
@@ -450,34 +545,15 @@ class TelaVendas(ctk.CTkFrame):
 
     def _carregar_planos(self):
         import time as _t
+        df = None
         for _ in range(15):
             df = db.mapear_planos()
             if not df.empty:
                 break
             _t.sleep(2)
-        if df.empty:
-            self.after(0, lambda: self._lbl_plano_status.configure(
-                text="(planos indisponíveis)", text_color=C["subtext"]))
+        if df is None or df.empty:
             return
-
-        def _criar():
-            self._lbl_plano_status.pack_forget()
-            for _, row in df.iterrows():
-                cod  = row["CodPlanoVnd"]
-                nome = str(row.get("NomePlanoVnd", ""))[:24]
-                var  = ctk.BooleanVar(value=False)
-                self._plano_vars[cod] = var
-                ctk.CTkCheckBox(
-                    self._plano_checks_frame,
-                    text=f"{cod} · {nome}",
-                    variable=var,
-                    text_color=C["text"],
-                    font=ctk.CTkFont(size=10),
-                    checkbox_height=16,
-                    checkbox_width=16,
-                ).pack(side="left", padx=6, pady=4)
-
-        self.after(0, _criar)
+        self.after(0, lambda: self._plano_drop.carregar(df))
 
     def _buscar_periodo(self):
         from datetime import datetime as dt2
@@ -492,7 +568,7 @@ class TelaVendas(ctk.CTkFrame):
             return
         self._lbl_periodo.configure(
             text=f"⟳ Buscando {ini} → {fim}...", text_color=C["warning"])
-        planos = [cod for cod, var in self._plano_vars.items() if var.get()]
+        planos = self._plano_drop.selecionados()
         filtro = f"i.DtVnd BETWEEN '{ini}' AND '{fim}'"
         def task():
             from bots.analise_bots import BotVendas
@@ -608,6 +684,16 @@ class TelaEstoque(ctk.CTkFrame):
         )
         self.tab_media.pack(fill="both", expand=True)
 
+        # Aba 6 — Sugestão de Compra
+        t6 = self._tabs.add("Sugestão Compra")
+        _secao(t6, "Itens com sugestão de reabastecimento")
+        self.tab_sug = Tabela(
+            t6,
+            ["CodItem", "DescrItem", "QtdEstq", "QtdSugerida", "FornecUltCmp", "CustoRepProd"],
+            height=300,
+        )
+        self.tab_sug.pack(fill="both", expand=True)
+
         # ── Itens críticos com filtro ─────────────────────────────────
         _secao(self, "ITENS CRÍTICOS (sem giro ou zerados)")
 
@@ -696,6 +782,11 @@ class TelaEstoque(ctk.CTkFrame):
         if ms:
             self.tab_media.populate(ms[:100])
 
+        # Aba 6 — Sugestão Compra
+        sg = dados.get("sugestao_compra", [])
+        if sg:
+            self.tab_sug.populate(sg[:200])
+
         # Itens críticos
         self._criticos_dados = dados.get("criticos", [])
         self._aplicar_filtro()
@@ -775,11 +866,16 @@ class TelaCRM(ctk.CTkFrame):
         self.g_faixas = Grafico(row2, "Clientes por Faixa de Inatividade")
         self.g_faixas.pack(side="left", fill="both", expand=True)
 
+        row3 = ctk.CTkFrame(self, fg_color="transparent")
+        row3.pack(fill="x", pady=(0, 10))
+        self.g_vend_status = Grafico(row3, "Status dos Vendedores — Meta vs Realizado")
+        self.g_vend_status.pack(fill="both", expand=True)
+
         _secao(self, "CLIENTES INATIVOS / EM RISCO (lista exportável)")
         self.tab_inat = Tabela(
             self,
             ["nome_cliente", "uf", "municipio", "ultima_compra", "dias_sem_compra", "ticket_medio"],
-            height=250,
+            height=200,
         )
         self.tab_inat.pack(fill="x")
 
@@ -805,6 +901,19 @@ class TelaCRM(ctk.CTkFrame):
             lbs = [str(r.get("faixa", "?")) for r in faixas]
             vs  = [float(r.get("qtd_clientes", 0) or 0) for r in faixas]
             self.g_faixas.barras(lbs, vs, cor=C["warning"])
+
+        mv = dados.get("meta_vendedor", [])
+        if mv:
+            lbs = [str(r.get("categoria", "?")) for r in mv]
+            vs  = [int(r.get("qtd", 0)) for r in mv]
+            _cor_map = {
+                "Acima da Meta":    C["success"],
+                "Próximo (80-99%)": C["warning"],
+                "Abaixo da Meta":   C["accent_verm"],
+                "Sem Meta":         C["subtext"],
+            }
+            cores = [_cor_map.get(l, C["accent_azul"]) for l in lbs]
+            self.g_vend_status.donut(lbs, vs, cores=cores)
 
         self.tab_inat.populate(dados.get("inativos_lista", [])[:100])
 

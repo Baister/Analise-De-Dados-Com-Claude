@@ -289,7 +289,10 @@ class BotEstoque(BaseBot):
                 e.CodGrpItem,
                 e.QtdEstq,
                 e.QtdEstqDisp,
-                ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) AS DiasSemVnd,
+                CASE WHEN ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) > 120
+                     THEN 120
+                     ELSE ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 0)
+                END AS DiasSemVnd,
                 e.DtUltVnd,
                 e.CustoRepProd,
                 e.VlrEstq,
@@ -307,7 +310,10 @@ class BotEstoque(BaseBot):
                 e.DescrMarca,
                 COUNT(*)                                                       AS qtd_itens,
                 SUM(e.VlrEstq)                                                 AS valor_estoque,
-                AVG(ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999))        AS media_dias_sem_venda,
+                AVG(CASE WHEN ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) > 120
+                         THEN 120
+                         ELSE ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 0)
+                    END)                                                           AS media_dias_sem_venda,
                 SUM(e.QtdEstq)                                                 AS quantidade_total
             FROM Blue.dbo.vmAnaliseEstqItem e
             GROUP BY e.DescrMarca
@@ -417,6 +423,18 @@ class BotEstoque(BaseBot):
             ORDER BY media_semanal DESC
         """)
 
+        df_sug = db.query(f"""
+            SELECT TOP {MAX}
+                CodItem,
+                DescrItem,
+                QtdEstq,
+                QtdSugerida,
+                FornecUltCmp,
+                CustoRepProd
+            FROM Blue.dbo.vmSugestaoCompra
+            ORDER BY QtdSugerida DESC
+        """)
+
         return {
             "total_itens":         _safe_int(df_resumo, "total_itens"),
             "valor_total_estoque": _safe_float(df_resumo, "valor_total_estoque"),
@@ -430,6 +448,7 @@ class BotEstoque(BaseBot):
             "orc_estoque":         df_orc_estq.to_dict("records"),
             "venda_compra":        df_venda_compra.to_dict("records"),
             "media_semanal":       df_media_semanal.to_dict("records"),
+            "sugestao_compra":     df_sug.to_dict("records"),
         }
 
 
@@ -558,6 +577,31 @@ class BotCRM(BaseBot):
             ORDER BY OrcPedVnd
         """)
 
+        # ── Meta vs Realizado por Vendedor ────────────────────────
+        df_meta_vend = db.query(f"""
+            SELECT TOP {MAX}
+                Vendedor,
+                ValMeta,
+                ValRealizado
+            FROM Blue.dbo.vmMetaRealizadoVnd
+        """)
+        if not df_meta_vend.empty and "ValMeta" in df_meta_vend.columns:
+            def _cat(row):
+                meta = float(row.get("ValMeta", 0) or 0)
+                real = float(row.get("ValRealizado", 0) or 0)
+                if meta <= 0:
+                    return "Sem Meta"
+                pct = real / meta * 100
+                if pct >= 100:
+                    return "Acima da Meta"
+                if pct >= 80:
+                    return "Próximo (80-99%)"
+                return "Abaixo da Meta"
+            df_meta_vend["categoria"] = df_meta_vend.apply(_cat, axis=1)
+            meta_cats = df_meta_vend.groupby("categoria").size().reset_index(name="qtd").to_dict("records")
+        else:
+            meta_cats = []
+
         # ── Clientes inativos / em risco ──────────────────────────
         df_inativos = db.query(f"""
             SELECT TOP {MAX}
@@ -573,9 +617,6 @@ class BotCRM(BaseBot):
                 SUM(v.ValVndTotal)                     AS faturamento_historico,
                 AVG(v.ValVndTotal)                     AS ticket_medio
             FROM Blue.dbo.vmVndDoc v
-            INNER JOIN Blue.dbo.vwVndDoc d ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE d.Cancelado = ''
-              AND d.Fat = 1
             GROUP BY v.CodCli
             HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) >= {DIAS_RISCO}
             ORDER BY dias_sem_compra DESC
@@ -650,6 +691,7 @@ class BotCRM(BaseBot):
             "qtd_em_risco":       len(em_risco),
             "qtd_inativos":       len(inativos),
             "tipo_clientes_30d":  df_tipo_cli.to_dict("records"),
+            "meta_vendedor":      meta_cats,
         }
 
 
