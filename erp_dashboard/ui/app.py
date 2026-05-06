@@ -772,15 +772,17 @@ class TelaEstoque(ctk.CTkFrame):
         )
         self.tab_media.pack(fill="both", expand=True)
 
-        # Aba 6 — Sugestão de Compra
-        t6 = self._tabs.add("Sugestão Compra")
-        _secao(t6, "Itens com sugestão de reabastecimento")
-        self.tab_sug = Tabela(
-            t6,
-            ["CodItem", "DescrItem", "QtdEstq", "QtdSugerida", "FornecUltCmp", "CustoRepProd"],
-            height=300,
-        )
-        self.tab_sug.pack(fill="both", expand=True)
+        # Aba 6 — Sugestão de Transferência
+        t6 = self._tabs.add("Sugestão Transf.")
+        _secao(t6, "Sugestão de transferência de estoque")
+        self._frm_sug = ctk.CTkFrame(t6, fg_color="transparent")
+        self._frm_sug.pack(fill="both", expand=True)
+
+        # Aba 7 — OS Pendentes
+        t7 = self._tabs.add("OS Pendentes")
+        _secao(t7, "Ordens de serviço com estoque temporário")
+        self._frm_os = ctk.CTkFrame(t7, fg_color="transparent")
+        self._frm_os.pack(fill="both", expand=True)
 
         # ── Itens críticos com filtro ─────────────────────────────────
         _secao(self, "ITENS CRÍTICOS (sem giro ou zerados)")
@@ -809,6 +811,19 @@ class TelaEstoque(ctk.CTkFrame):
             height=200,
         )
         self.tab_crit.pack(fill="x")
+
+    def _render_dyn_tab(self, frame, dados: list, attr: str):
+        old = getattr(self, attr, None)
+        if old is not None:
+            old.destroy()
+            setattr(self, attr, None)
+        if not dados:
+            return
+        cols = list(dados[0].keys())
+        tab = Tabela(frame, cols, height=300)
+        tab.pack(fill="both", expand=True)
+        tab.populate(dados[:200])
+        setattr(self, attr, tab)
 
     def _aplicar_filtro(self):
         termo = self._filtro_var.get().strip().lower()
@@ -870,10 +885,9 @@ class TelaEstoque(ctk.CTkFrame):
         if ms:
             self.tab_media.populate(ms[:100])
 
-        # Aba 6 — Sugestão Compra
-        sg = dados.get("sugestao_compra", [])
-        if sg:
-            self.tab_sug.populate(sg[:200])
+        # Aba 6 — Sugestão Transf. / Aba 7 — OS Pendentes
+        self._render_dyn_tab(self._frm_sug, dados.get("sugestao_transferencia", []), "_tab_sug_inst")
+        self._render_dyn_tab(self._frm_os,  dados.get("estq_os", []),               "_tab_os_inst")
 
         # Itens críticos
         self._criticos_dados = dados.get("criticos", [])

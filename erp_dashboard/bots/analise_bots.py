@@ -300,206 +300,260 @@ class BotVendas(BaseBot):
 #  BOT ESTOQUE
 # ──────────────────────────────────────────────────────────────────
 class BotEstoque(BaseBot):
+    """Detecta colunas em runtime via SELECT TOP 0 * para tolerar variações de schema.
+    Views usadas (somente SELECT): vmAnaliseEstqItem, vmAnaliseEstqVnd,
+    vmItemMovEstq, vmSugestaoTransfEstq, vwEstqTempOs, vwFuncRespEstq."""
+
+    _VIEWS = {
+        "item": "Blue.dbo.vmAnaliseEstqItem",
+        "vnd":  "Blue.dbo.vmAnaliseEstqVnd",
+        "mov":  "Blue.dbo.vmItemMovEstq",
+        "sug":  "Blue.dbo.vmSugestaoTransfEstq",
+        "os":   "Blue.dbo.vwEstqTempOs",
+        "func": "Blue.dbo.vwFuncRespEstq",
+    }
+
     def __init__(self):
         super().__init__("estoque")
-        self._ev: str = ""   # view de estoque detectada em runtime
+        self._s: dict[str, list] = {}
+        self._loaded = False
 
-    def _ev_name(self) -> str:
-        if not self._ev:
-            for v in ("Blue.dbo.vmAnaliseEstqVnd", "Blue.dbo.vmAnaliseEstqItem"):
-                chk = db.query(f"SELECT TOP 1 1 AS chk FROM {v}")
-                if not chk.empty:
-                    self._ev = v
-                    logger.info("Estoque view: %s", v)
-                    break
-            if not self._ev:
-                self._ev = "Blue.dbo.vmAnaliseEstqVnd"
-        return self._ev
+    def _load_schemas(self):
+        if self._loaded:
+            return
+        for tag, view in self._VIEWS.items():
+            df = db.query(f"SELECT TOP 0 * FROM {view}")
+            self._s[tag] = list(df.columns) if len(df.columns) > 0 else []
+            logger.info("[Estq] %-4s %s → %s", tag, view.split(".")[-1],
+                        self._s[tag] if self._s[tag] else "(inacessível)")
+        self._loaded = True
+
+    def _c(self, tag: str, *cands: str) -> str:
+        """Retorna o primeiro candidato encontrado no schema (insensível a maiúsculas)."""
+        lc = {c.lower(): c for c in self._s.get(tag, [])}
+        for cand in cands:
+            if cand.lower() in lc:
+                return lc[cand.lower()]
+        return ""
+
+    def _best(self, *tags: str) -> tuple:
+        """(view_path, tag) para o primeiro tag com schema disponível."""
+        for t in tags:
+            if self._s.get(t):
+                return self._VIEWS[t], t
+        return self._VIEWS[tags[0]], tags[0]
 
     def analisar(self) -> dict:
-        ev = self._ev_name()
+        self._load_schemas()
+        ev,  et  = self._best("item", "vnd")
+        evv, evt = self._best("vnd",  "item")
+
+        col_cod  = self._c(et,  "CodItem",      "Codigo",       "CodigoItem")
+        col_dsc  = self._c(et,  "DescrItem",    "Descricao",    "NomeItem",     "DescrProduto")
+        col_mrc  = self._c(et,  "DescrMarca",   "Marca",        "DescrMarcaItem","NomeMarca")
+        col_qtd  = self._c(et,  "QtdEstq",      "SaldoEstq",    "QtdSaldo",     "Qtd")
+        col_disp = self._c(et,  "QtdEstqDisp",  "SaldoDisp",    "QtdDisp",      "QtdSaldoDisp")
+        col_vlr  = self._c(et,  "VlrEstq",      "ValEstq",      "VlrTotEstq",   "SaldoVlr",  "ValorEstoque")
+        col_cst  = self._c(et,  "CustoRepProd", "CustoRep",     "ValCustoRep",  "CustoReposicao")
+        col_forn = self._c(et,  "FornecUltCmp", "FornecUltima", "CodFornecUlt", "Fornecedor")
+        col_pend = self._c(et,  "QtdPendPedCmp","PendPed",      "QtdPedCmp",    "QtdPendCmp")
+        col_dtv  = (self._c(evt,"DtUltVnd",     "DtUltimaVenda","DtVnd")
+                    or self._c(et,"DtUltVnd",   "DtUltimaVenda","DtVnd"))
+
+        smov     = self._s.get("mov", [])
+        col_mcod = self._c("mov", "CodItem",      "Codigo")
+        col_mdsc = self._c("mov", "DescrItem",    "Descricao",  "NomeItem")
+        col_ment = self._c("mov", "QtdEntrada",   "Entrada",    "Qtd_Entrada")
+        col_msai = self._c("mov", "QtdSaida",     "Saida",      "Qtd_Saida")
+        col_mliq = self._c("mov", "QtdLiqVendas", "QtdLiq",     "Liquido")
+        col_mdt  = self._c("mov", "DtMovEstq",    "DtMov",      "Data",  "DtMovimento")
+
+        def _sum(col, alias):
+            return f"SUM(ISNULL({col},0)) AS {alias}" if col else f"0 AS {alias}"
+
+        wh_q    = f"WHERE ISNULL({col_qtd},0)>0" if col_qtd else ""
+        zero_ex = (f"SUM(CASE WHEN ISNULL({col_disp},0)<=0 THEN 1 ELSE 0 END) AS itens_zerados"
+                   if col_disp else "0 AS itens_zerados")
+        giro_ex = (f"SUM(CASE WHEN ISNULL(DATEDIFF(day,{col_dtv},GETDATE()),9999)"
+                   f">{DIAS_CRITICO} THEN 1 ELSE 0 END) AS itens_sem_giro"
+                   if col_dtv else "0 AS itens_sem_giro")
+
         df_resumo = db.query(f"""
-            SELECT
-                COUNT(*)  AS total_itens,
-                SUM(VlrEstq)      AS valor_total_estoque,
-                SUM(QtdEstq)      AS qtd_total,
-                SUM(QtdEstqDisp)  AS qtd_disponivel,
-                SUM(CASE WHEN QtdEstqDisp <= 0 THEN 1 ELSE 0 END) AS itens_zerados,
-                SUM(CASE WHEN ISNULL(DATEDIFF(day, DtUltVnd, GETDATE()), 9999) > {DIAS_CRITICO}
-                         THEN 1 ELSE 0 END) AS itens_sem_giro
-            FROM {ev}
-            WHERE QtdEstq > 0
+            SELECT COUNT(*) AS total_itens,
+                   {_sum(col_vlr, 'valor_total_estoque')},
+                   {_sum(col_qtd, 'qtd_total')},
+                   {_sum(col_disp,'qtd_disponivel')},
+                   {zero_ex}, {giro_ex}
+            FROM {ev} {wh_q}
         """)
 
+        _cp = list(filter(None, [
+            f"e.{col_cod}  AS CodItem"       if col_cod  else None,
+            f"e.{col_dsc}  AS DescrItem"     if col_dsc  else None,
+            f"e.{col_mrc}  AS DescrMarca"    if col_mrc  else None,
+            f"e.{col_qtd}  AS QtdEstq"       if col_qtd  else None,
+            f"e.{col_disp} AS QtdEstqDisp"   if col_disp else None,
+            (f"CASE WHEN ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999)>120 THEN 120"
+             f" ELSE ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),0) END AS DiasSemVnd"
+             if col_dtv else None),
+            f"e.{col_dtv}  AS DtUltVnd"      if col_dtv  else None,
+            f"e.{col_cst}  AS CustoRepProd"  if col_cst  else None,
+            f"e.{col_vlr}  AS VlrEstq"       if col_vlr  else None,
+            f"e.{col_pend} AS QtdPendPedCmp" if col_pend else None,
+            f"e.{col_forn} AS FornecUltCmp"  if col_forn else None,
+        ]))
+        _wd = (f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999)>{DIAS_CRITICO}"
+               if col_dtv else "1=0")
+        _wz = f"e.{col_disp}<=0" if col_disp else "1=0"
+        _od = f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999) DESC," if col_dtv else ""
+        _ov = f"e.{col_vlr} DESC" if col_vlr else "1"
         df_criticos = db.query(f"""
-            SELECT TOP {MAX}
-                e.CodItem,
-                e.DescrItem,
-                e.DescrMarca,
-                e.CodGrpItem,
-                e.QtdEstq,
-                e.QtdEstqDisp,
-                CASE WHEN ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) > 120
-                     THEN 120
-                     ELSE ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 0)
-                END AS DiasSemVnd,
-                e.DtUltVnd,
-                e.CustoRepProd,
-                e.VlrEstq,
-                e.QtdPendPedCmp,
-                e.FornecUltCmp
-            FROM {ev} e
-            WHERE ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) > {DIAS_CRITICO}
-               OR e.QtdEstqDisp <= 0
-            ORDER BY ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) DESC,
-                     e.VlrEstq DESC
+            SELECT TOP {MAX} {", ".join(_cp) if _cp else "e.*"}
+            FROM {evv} e WHERE {_wd} OR {_wz}
+            ORDER BY {_od} {_ov}
         """)
 
         df_marca = db.query(f"""
-            SELECT TOP 30
-                e.DescrMarca,
-                COUNT(*)                                                       AS qtd_itens,
-                SUM(e.VlrEstq)                                                 AS valor_estoque,
-                AVG(CASE WHEN ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) > 120
-                         THEN 120
-                         ELSE ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 0)
-                    END)                                                           AS media_dias_sem_venda,
-                SUM(e.QtdEstq)                                                 AS quantidade_total
-            FROM {ev} e
-            GROUP BY e.DescrMarca
-            ORDER BY valor_estoque DESC
-        """)
+            SELECT TOP 30 e.{col_mrc} AS DescrMarca,
+                COUNT(*) AS qtd_itens,
+                {_sum(col_vlr, 'valor_estoque')},
+                {_sum(col_qtd, 'quantidade_total')}
+            FROM {ev} e GROUP BY e.{col_mrc} ORDER BY valor_estoque DESC
+        """) if col_mrc else pd.DataFrame()
 
-        df_mov = db.query(f"""
-            SELECT TOP 2000
-                m.CodItem,
-                m.DescrItem,
-                SUM(m.QtdEntrada)   AS entradas,
-                SUM(m.QtdSaida)     AS saidas,
-                SUM(m.QtdLiqVendas) AS vendas_liquidas
-            FROM Blue.dbo.vmItemMovEstq m
-            WHERE m.DtMovEstq >= DATEADD(day, -30, GETDATE())
-            GROUP BY m.CodItem, m.DescrItem
-            ORDER BY saidas DESC
-        """)
+        _wm = f"m.{col_mdt}>=DATEADD(day,-30,GETDATE())" if col_mdt else "1=1"
+        df_mov = pd.DataFrame()
+        if smov and col_mcod:
+            _mp = [f"m.{col_mcod} AS CodItem"]
+            if col_mdsc: _mp.append(f"m.{col_mdsc} AS DescrItem")
+            _mp.append(f"SUM(m.{col_ment}) AS entradas" if col_ment else "0 AS entradas")
+            _mp.append(f"SUM(m.{col_msai}) AS saidas"   if col_msai else "0 AS saidas")
+            if col_mliq: _mp.append(f"SUM(m.{col_mliq}) AS vendas_liquidas")
+            _grp = f"m.{col_mcod}" + (f", m.{col_mdsc}" if col_mdsc else "")
+            df_mov = db.query(f"""
+                SELECT TOP 2000 {", ".join(_mp)}
+                FROM Blue.dbo.vmItemMovEstq m WHERE {_wm}
+                GROUP BY {_grp} ORDER BY saidas DESC
+            """)
 
-        # ── Venda × Estoque por item (90 dias) ───────────────────────
-        df_venda_estq = db.query(f"""
-            SELECT TOP 30
-                e.CodItem,
-                e.DescrItem,
-                e.DescrMarca,
-                e.QtdEstq,
-                e.QtdEstqDisp,
-                e.VlrEstq,
-                ISNULL(v.qtd_vendida_90d, 0) AS qtd_vendida_90d,
-                ISNULL(v.val_vendido_90d,  0) AS val_vendido_90d
-            FROM {ev} e
-            LEFT JOIN (
-                SELECT i.CodItem,
-                       SUM(i.QtdItem)         AS qtd_vendida_90d,
-                       SUM(i.PrecoVndTotItem) AS val_vendido_90d
+        df_venda_estq = pd.DataFrame()
+        if col_cod and col_disp:
+            _vep = [f"e.{col_cod} AS CodItem"]
+            for _cx, _ax in [(col_dsc,"DescrItem"),(col_mrc,"DescrMarca"),
+                              (col_qtd,"QtdEstq"),  (col_vlr,"VlrEstq")]:
+                if _cx:
+                    _vep.append(f"e.{_cx} AS {_ax}")
+            _vep += [f"e.{col_disp} AS QtdEstqDisp",
+                     "ISNULL(v.qtd_vendida_90d,0) AS qtd_vendida_90d",
+                     "ISNULL(v.val_vendido_90d, 0) AS val_vendido_90d"]
+            df_venda_estq = db.query(f"""
+                SELECT TOP 30 {", ".join(_vep)}
+                FROM {ev} e
+                LEFT JOIN (
+                    SELECT i.CodItem,
+                           SUM(i.QtdItem)         AS qtd_vendida_90d,
+                           SUM(i.PrecoVndTotItem) AS val_vendido_90d
+                    FROM Blue.dbo.vmVndItemDoc i
+                    INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
+                    WHERE d.Cancelado='' AND i.Fat=1
+                      AND i.DtVnd>=DATEADD(day,-90,GETDATE())
+                    GROUP BY i.CodItem
+                ) v ON e.{col_cod}=v.CodItem
+                WHERE ISNULL(e.{col_disp},0)>=0
+                ORDER BY ISNULL(v.qtd_vendida_90d,0) DESC
+            """)
+
+        df_orc_estq = pd.DataFrame()
+        if col_cod and col_disp:
+            _oep = [f"e.{col_cod} AS CodItem"]
+            if col_dsc: _oep.append(f"e.{col_dsc} AS DescrItem")
+            if col_mrc: _oep.append(f"e.{col_mrc} AS DescrMarca")
+            _oep += [f"e.{col_disp} AS QtdEstqDisp",
+                     "ISNULL(o.qtd_orcada,0) AS qtd_orcada",
+                     "ISNULL(o.val_orcado, 0) AS val_orcado"]
+            df_orc_estq = db.query(f"""
+                SELECT TOP 30 {", ".join(_oep)}
+                FROM {ev} e
+                LEFT JOIN (
+                    SELECT i.CodItem,
+                           SUM(i.QtdItem)         AS qtd_orcada,
+                           SUM(i.PrecoVndTotItem) AS val_orcado
+                    FROM Blue.dbo.TbOrcPedVnd p
+                    INNER JOIN Blue.dbo.vmVndItemDoc i ON p.NrOrcPedVnd=i.NrDoc
+                    WHERE p.OrcPedVnd=1
+                      AND p.DtOrcPedVnd>={_MES_INI}
+                      AND p.DtOrcPedVnd< {_MES_FIM}
+                    GROUP BY i.CodItem
+                ) o ON e.{col_cod}=o.CodItem
+                WHERE ISNULL(o.qtd_orcada,0)>0
+                ORDER BY qtd_orcada DESC
+            """)
+
+        df_venda_compra = pd.DataFrame()
+        if smov and col_mcod:
+            _vcp = [f"m.{col_mcod} AS CodItem"]
+            if col_mdsc: _vcp.append(f"m.{col_mdsc} AS DescrItem")
+            _vcp.append(f"SUM(m.{col_msai}) AS saidas"   if col_msai else "0 AS saidas")
+            _vcp.append(f"SUM(m.{col_ment}) AS entradas" if col_ment else "0 AS entradas")
+            _grpvc = f"m.{col_mcod}" + (f", m.{col_mdsc}" if col_mdsc else "")
+            _hvc = (f"SUM(m.{col_msai})>0 OR SUM(m.{col_ment})>0"
+                    if col_msai and col_ment else "1=1")
+            df_venda_compra = db.query(f"""
+                SELECT TOP 30 {", ".join(_vcp)}
+                FROM Blue.dbo.vmItemMovEstq m
+                WHERE {_wm} GROUP BY {_grpvc}
+                HAVING {_hvc} ORDER BY saidas DESC
+            """)
+
+        df_media_semanal = pd.DataFrame()
+        if col_cod:
+            _msp = ["i.CodItem"]
+            if col_dsc: _msp.append(f"MAX(e.{col_dsc}) AS DescrItem")
+            if col_mrc: _msp.append(f"MAX(e.{col_mrc}) AS DescrMarca")
+            _msp += ["SUM(i.QtdItem) AS total_90d",
+                     "CAST(SUM(i.QtdItem) AS FLOAT)/(90.0/7.0) AS media_semanal"]
+            if col_qtd:  _msp.append(f"MAX(ISNULL(e.{col_qtd},0)) AS QtdEstq")
+            if col_disp: _msp.append(f"MAX(ISNULL(e.{col_disp},0)) AS QtdEstqDisp")
+            _cov = (f"MAX(ISNULL(e.{col_disp},0))/(CAST(SUM(i.QtdItem) AS FLOAT)/(90.0/7.0))"
+                    if col_disp else "999")
+            _msp.append(
+                f"CASE WHEN SUM(i.QtdItem)>0 THEN {_cov} ELSE 999 END AS semanas_cobertura")
+            df_media_semanal = db.query(f"""
+                SELECT TOP {MAX} {", ".join(_msp)}
                 FROM Blue.dbo.vmVndItemDoc i
-                INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
-                WHERE d.Cancelado = '' AND i.Fat = 1
-                  AND i.DtVnd >= DATEADD(day, -90, GETDATE())
-                GROUP BY i.CodItem
-            ) v ON e.CodItem = v.CodItem
-            WHERE e.QtdEstq > 0
-            ORDER BY ISNULL(v.qtd_vendida_90d, 0) DESC
-        """)
+                INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
+                LEFT JOIN {ev} e ON i.CodItem=e.{col_cod}
+                WHERE d.Cancelado='' AND i.Fat=1
+                  AND i.DtVnd>=DATEADD(day,-90,GETDATE())
+                GROUP BY i.CodItem ORDER BY media_semanal DESC
+            """)
 
-        # ── Orçamento × Estoque por item (mês atual) ─────────────────
-        df_orc_estq = db.query(f"""
-            SELECT TOP 30
-                e.CodItem,
-                e.DescrItem,
-                e.DescrMarca,
-                e.QtdEstqDisp,
-                ISNULL(o.qtd_orcada, 0) AS qtd_orcada,
-                ISNULL(o.val_orcado,  0) AS val_orcado
-            FROM {ev} e
-            LEFT JOIN (
-                SELECT i.CodItem,
-                       SUM(i.QtdItem)         AS qtd_orcada,
-                       SUM(i.PrecoVndTotItem) AS val_orcado
-                FROM Blue.dbo.TbOrcPedVnd p
-                INNER JOIN Blue.dbo.vmVndItemDoc i ON p.NrOrcPedVnd = i.NrDoc
-                WHERE p.OrcPedVnd = 1
-                  AND p.DtOrcPedVnd >= {_MES_INI}
-                  AND p.DtOrcPedVnd <  {_MES_FIM}
-                GROUP BY i.CodItem
-            ) o ON e.CodItem = o.CodItem
-            WHERE ISNULL(o.qtd_orcada, 0) > 0
-            ORDER BY qtd_orcada DESC
-        """)
+        df_sug = (db.query(f"SELECT TOP {MAX} * FROM Blue.dbo.vmSugestaoTransfEstq")
+                  if self._s.get("sug") else pd.DataFrame())
+        df_os  = (db.query("SELECT TOP 200 * FROM Blue.dbo.vwEstqTempOs")
+                  if self._s.get("os") else pd.DataFrame())
 
-        # ── Venda × Compra (30 dias, via movimentação) ───────────────
-        df_venda_compra = db.query(f"""
-            SELECT TOP 30
-                m.CodItem,
-                m.DescrItem,
-                SUM(m.QtdSaida)   AS saidas,
-                SUM(m.QtdEntrada) AS entradas
-            FROM Blue.dbo.vmItemMovEstq m
-            WHERE m.DtMovEstq >= DATEADD(day, -30, GETDATE())
-            GROUP BY m.CodItem, m.DescrItem
-            HAVING SUM(m.QtdSaida) > 0 OR SUM(m.QtdEntrada) > 0
-            ORDER BY saidas DESC
-        """)
-
-        # ── Média venda semanal por item (90 dias) ───────────────────
-        df_media_semanal = db.query(f"""
-            SELECT TOP {MAX}
-                i.CodItem,
-                MAX(e.DescrItem)   AS DescrItem,
-                MAX(e.DescrMarca)  AS DescrMarca,
-                SUM(i.QtdItem)                                        AS total_90d,
-                CAST(SUM(i.QtdItem) AS FLOAT) / (90.0 / 7.0)         AS media_semanal,
-                MAX(ISNULL(e.QtdEstq, 0))                             AS QtdEstq,
-                MAX(ISNULL(e.QtdEstqDisp, 0))                         AS QtdEstqDisp,
-                CASE
-                    WHEN SUM(i.QtdItem) > 0
-                    THEN MAX(ISNULL(e.QtdEstqDisp, 0))
-                         / (CAST(SUM(i.QtdItem) AS FLOAT) / (90.0 / 7.0))
-                    ELSE 999
-                END AS semanas_cobertura
-            FROM Blue.dbo.vmVndItemDoc i
-            INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
-            LEFT JOIN {ev} e ON i.CodItem = e.CodItem
-            WHERE d.Cancelado = '' AND i.Fat = 1
-              AND i.DtVnd >= DATEADD(day, -90, GETDATE())
-            GROUP BY i.CodItem
-            ORDER BY media_semanal DESC
-        """)
-
-        df_sug = db.query(f"""
-            SELECT TOP {MAX}
-                CodItem,
-                DescrItem,
-                QtdEstq,
-                QtdSugerida,
-                FornecUltCmp,
-                CustoRepProd
-            FROM Blue.dbo.vmSugestaoCompra
-            ORDER BY QtdSugerida DESC
-        """)
+        def _recs(df):
+            return df.to_dict("records") if not df.empty else []
 
         return {
-            "total_itens":         _safe_int(df_resumo, "total_itens"),
-            "valor_total_estoque": _safe_float(df_resumo, "valor_total_estoque"),
-            "qtd_disponivel":      _safe_int(df_resumo, "qtd_disponivel"),
-            "itens_zerados":       _safe_int(df_resumo, "itens_zerados"),
-            "itens_sem_giro":      _safe_int(df_resumo, "itens_sem_giro"),
-            "criticos":            df_criticos.to_dict("records"),
-            "por_marca":           df_marca.to_dict("records"),
-            "movimentacao":        df_mov.head(50).to_dict("records"),
-            "venda_estoque":       df_venda_estq.to_dict("records"),
-            "orc_estoque":         df_orc_estq.to_dict("records"),
-            "venda_compra":        df_venda_compra.to_dict("records"),
-            "media_semanal":       df_media_semanal.to_dict("records"),
-            "sugestao_compra":     df_sug.to_dict("records"),
+            "total_itens":            _safe_int(df_resumo,  "total_itens"),
+            "valor_total_estoque":    _safe_float(df_resumo,"valor_total_estoque"),
+            "qtd_disponivel":         _safe_int(df_resumo,  "qtd_disponivel"),
+            "itens_zerados":          _safe_int(df_resumo,  "itens_zerados"),
+            "itens_sem_giro":         _safe_int(df_resumo,  "itens_sem_giro"),
+            "criticos":               _recs(df_criticos),
+            "por_marca":              _recs(df_marca),
+            "movimentacao":           df_mov.head(50).to_dict("records") if not df_mov.empty else [],
+            "venda_estoque":          _recs(df_venda_estq),
+            "orc_estoque":            _recs(df_orc_estq),
+            "venda_compra":           _recs(df_venda_compra),
+            "media_semanal":          _recs(df_media_semanal),
+            "sugestao_transferencia": _recs(df_sug),
+            "estq_os":                _recs(df_os),
         }
+
+
 
 
 # ──────────────────────────────────────────────────────────────────
