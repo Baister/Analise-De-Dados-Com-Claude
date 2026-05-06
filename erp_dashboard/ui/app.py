@@ -11,7 +11,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import threading
 from datetime import datetime
 
-from config.settings import APP_TITLE, APP_VERSION, CORES, DB_CONFIG, ALERTAS, FILIAL_EXCLUIR
+from config.settings import APP_TITLE, APP_VERSION, CORES, DB_CONFIG, ALERTAS
 from core.database import db
 from bots.analise_bots import BotManager
 from core.exportador import exportar_excel

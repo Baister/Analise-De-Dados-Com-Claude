@@ -2,7 +2,22 @@
   "permissions": {
     "allow": [
       "PowerShell(& \"C:/Users/Gustavo/AppData/Local/Programs/Python/Python313/python.exe\" -m pip install customtkinter pyodbc pandas numpy matplotlib pillow openpyxl 2>&1)",
-      "PowerShell(& \"C:/Users/Gustavo/AppData/Local/Programs/Python/Python313/python.exe\" -c \"import customtkinter; import pyodbc; print\\('OK - customtkinter:', customtkinter.__version__, '| pyodbc:', pyodbc.version\\)\" 2>&1)"
+      "PowerShell(& \"C:/Users/Gustavo/AppData/Local/Programs/Python/Python313/python.exe\" -c \"import customtkinter; import pyodbc; print\\('OK - customtkinter:', customtkinter.__version__, '| pyodbc:', pyodbc.version\\)\" 2>&1)",
+      "PowerShell(& \"C:/Users/Gustavo/AppData/Local/Programs/Python/Python313/python.exe\" main.py 2>&1)"
+    ],
+    "deny": [
+      "Bash(rm *)",
+      "Bash(rm -rf *)",
+      "Bash(drop *)",
+      "Bash(truncate *)",
+      "PowerShell(Remove-Item *)",
+      "PowerShell(* DROP *)",
+      "PowerShell(* TRUNCATE *)",
+      "PowerShell(* DELETE * FROM *)",
+      "PowerShell(sqlcmd* -Q *DROP*)",
+      "PowerShell(sqlcmd* -Q *DELETE*)",
+      "PowerShell(sqlcmd* -Q *TRUNCATE*)",
+      "PowerShell(sqlcmd* -Q *ALTER*)"
     ]
   }
 }

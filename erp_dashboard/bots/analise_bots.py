@@ -8,7 +8,7 @@ import threading
 import time
 import logging
 from datetime import datetime
-from config.settings import BOT_INTERVALS, ALERTAS, FILIAL_EXCLUIR
+from config.settings import BOT_INTERVALS, ALERTAS, PLANO_EXCLUIR_FAT
 from core.database import db
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ DIAS_CRITICO    = ALERTAS.get("estoque_critico_dias_sem_vnd", 90)
 DIAS_LISTA_INAT = 30  # mostra inativos a partir de 30 dias
 _MES_INI        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)"
 _MES_FIM        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)"
-_FILTRO_FILIAL  = f"AND v.CodFilial <> '{FILIAL_EXCLUIR}'" if FILIAL_EXCLUIR else ""
+_EXCLUIR_PLANO  = f"AND v.CodPlanoVnd <> {PLANO_EXCLUIR_FAT}"  # exclui plano 25 dos totais
 
 
 def _safe_float(df: pd.DataFrame, col: str) -> float:
@@ -103,7 +103,7 @@ class BotDashboard(BaseBot):
               AND v.DtVnd <  {_MES_FIM}
               AND d.Cancelado    = ''
               AND d.Fat          = 1
-              {_FILTRO_FILIAL}
+              {_EXCLUIR_PLANO}
         """)
 
         df_vend = db.query(f"""
@@ -119,7 +119,7 @@ class BotDashboard(BaseBot):
               AND v.DtVnd <  {_MES_FIM}
               AND d.Cancelado = ''
               AND d.Fat = 1
-              {_FILTRO_FILIAL}
+              {_EXCLUIR_PLANO}
             GROUP BY v.Vendedor, v.CodVend
             ORDER BY total_venda DESC
         """)
@@ -133,7 +133,7 @@ class BotDashboard(BaseBot):
             WHERE v.DtVnd >= DATEADD(day, -30, GETDATE())
               AND d.Cancelado = ''
               AND d.Fat = 1
-              {_FILTRO_FILIAL}
+              {_EXCLUIR_PLANO}
             GROUP BY CONVERT(date, v.DtVnd)
             ORDER BY dia
         """)
@@ -208,7 +208,7 @@ class BotVendas(BaseBot):
             WHERE d.Cancelado = '' AND d.Fat = 1
               AND {filtro_v}
               {filtro_plano_v}
-              {_FILTRO_FILIAL}
+              {_EXCLUIR_PLANO}
         """)
 
         df_marca = db.query(f"""
