@@ -266,6 +266,21 @@ class BotVendas(BaseBot):
             ORDER BY total_venda DESC
         """)
 
+        df_dev_vend = db.query(f"""
+            SELECT
+                v.CodVend,
+                COUNT(DISTINCT dev.NrDoc) AS qtd_devolucoes
+            FROM Blue.dbo.vmMetricasMotivoDevItem dev
+            INNER JOIN Blue.dbo.vmVndDoc v ON dev.NrDoc = v.NrDoc
+            WHERE {filtro_d}
+            GROUP BY v.CodVend
+        """)
+        if not df_dev_vend.empty and not df_vend.empty:
+            dev_dict = df_dev_vend.set_index("CodVend")["qtd_devolucoes"].to_dict()
+            df_vend["qtd_devolucoes"] = df_vend["CodVend"].map(dev_dict).fillna(0).astype(int)
+        elif not df_vend.empty:
+            df_vend["qtd_devolucoes"] = 0
+
         margem = sum(float(r.get("margem_bruta", 0) or 0)
                      for r in df_marca.to_dict("records"))
 
@@ -287,8 +302,22 @@ class BotVendas(BaseBot):
 class BotEstoque(BaseBot):
     def __init__(self):
         super().__init__("estoque")
+        self._ev: str = ""   # view de estoque detectada em runtime
+
+    def _ev_name(self) -> str:
+        if not self._ev:
+            for v in ("Blue.dbo.vmAnaliseEstqVnd", "Blue.dbo.vmAnaliseEstqItem"):
+                chk = db.query(f"SELECT TOP 1 1 AS chk FROM {v}")
+                if not chk.empty:
+                    self._ev = v
+                    logger.info("Estoque view: %s", v)
+                    break
+            if not self._ev:
+                self._ev = "Blue.dbo.vmAnaliseEstqVnd"
+        return self._ev
 
     def analisar(self) -> dict:
+        ev = self._ev_name()
         df_resumo = db.query(f"""
             SELECT
                 COUNT(*)  AS total_itens,
@@ -298,7 +327,7 @@ class BotEstoque(BaseBot):
                 SUM(CASE WHEN QtdEstqDisp <= 0 THEN 1 ELSE 0 END) AS itens_zerados,
                 SUM(CASE WHEN ISNULL(DATEDIFF(day, DtUltVnd, GETDATE()), 9999) > {DIAS_CRITICO}
                          THEN 1 ELSE 0 END) AS itens_sem_giro
-            FROM Blue.dbo.vmAnaliseEstqVnd
+            FROM {ev}
             WHERE QtdEstq > 0
         """)
 
@@ -319,7 +348,7 @@ class BotEstoque(BaseBot):
                 e.VlrEstq,
                 e.QtdPendPedCmp,
                 e.FornecUltCmp
-            FROM Blue.dbo.vmAnaliseEstqVnd e
+            FROM {ev} e
             WHERE ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) > {DIAS_CRITICO}
                OR e.QtdEstqDisp <= 0
             ORDER BY ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) DESC,
@@ -336,7 +365,7 @@ class BotEstoque(BaseBot):
                          ELSE ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 0)
                     END)                                                           AS media_dias_sem_venda,
                 SUM(e.QtdEstq)                                                 AS quantidade_total
-            FROM Blue.dbo.vmAnaliseEstqVnd e
+            FROM {ev} e
             GROUP BY e.DescrMarca
             ORDER BY valor_estoque DESC
         """)
@@ -365,7 +394,7 @@ class BotEstoque(BaseBot):
                 e.VlrEstq,
                 ISNULL(v.qtd_vendida_90d, 0) AS qtd_vendida_90d,
                 ISNULL(v.val_vendido_90d,  0) AS val_vendido_90d
-            FROM Blue.dbo.vmAnaliseEstqVnd e
+            FROM {ev} e
             LEFT JOIN (
                 SELECT i.CodItem,
                        SUM(i.QtdItem)         AS qtd_vendida_90d,
@@ -389,7 +418,7 @@ class BotEstoque(BaseBot):
                 e.QtdEstqDisp,
                 ISNULL(o.qtd_orcada, 0) AS qtd_orcada,
                 ISNULL(o.val_orcado,  0) AS val_orcado
-            FROM Blue.dbo.vmAnaliseEstqVnd e
+            FROM {ev} e
             LEFT JOIN (
                 SELECT i.CodItem,
                        SUM(i.QtdItem)         AS qtd_orcada,
@@ -437,7 +466,7 @@ class BotEstoque(BaseBot):
                 END AS semanas_cobertura
             FROM Blue.dbo.vmVndItemDoc i
             INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
-            LEFT JOIN Blue.dbo.vmAnaliseEstqVnd e ON i.CodItem = e.CodItem
+            LEFT JOIN {ev} e ON i.CodItem = e.CodItem
             WHERE d.Cancelado = '' AND i.Fat = 1
               AND i.DtVnd >= DATEADD(day, -90, GETDATE())
             GROUP BY i.CodItem
@@ -506,42 +535,57 @@ class BotFinanceiro(BaseBot):
             ORDER BY total DESC
         """)
 
+        # inadimplentes: query simples sem JOIN (mais robusta)
         df_inad = db.query("""
             SELECT TOP 50
-                r.CodCli,
-                MAX(c.NomeFantCli)                     AS NomeFantCli,
-                MAX(c.RzsCli)                          AS RzsCli,
-                SUM(r.RcboLiquido)                     AS divida_total,
+                CodCli,
+                SUM(RcboLiquido)                      AS divida_total,
                 COUNT(*)                               AS qtd_titulos,
-                MAX(DATEDIFF(day, r.DtVcto, GETDATE())) AS max_dias_atraso
-            FROM Blue.dbo.vmVendaXTipoRcbo r
-            LEFT JOIN (
-                SELECT DISTINCT CodCli, NomeFantCli, RzsCli
-                FROM Blue.dbo.vmVndDoc
-            ) c ON r.CodCli = c.CodCli
-            WHERE r.DtQuitacao IS NULL
-              AND r.DtVcto < GETDATE()
-            GROUP BY r.CodCli
+                MAX(DATEDIFF(day, DtVcto, GETDATE()))  AS max_dias_atraso
+            FROM Blue.dbo.vmVendaXTipoRcbo
+            WHERE DtQuitacao IS NULL
+              AND DtVcto < GETDATE()
+            GROUP BY CodCli
             ORDER BY divida_total DESC
         """)
+        if not df_inad.empty:
+            _df_cli = db.query("""
+                SELECT DISTINCT CodCli, NomeFantCli, RzsCli
+                FROM Blue.dbo.vmVndDoc WHERE CodCli IS NOT NULL
+            """)
+            if not _df_cli.empty:
+                _idx = _df_cli.set_index("CodCli").to_dict("index")
+                df_inad["NomeFantCli"] = df_inad["CodCli"].map(
+                    lambda c: _idx.get(c, {}).get("NomeFantCli", str(c)))
+                df_inad["RzsCli"] = df_inad["CodCli"].map(
+                    lambda c: _idx.get(c, {}).get("RzsCli", ""))
+            else:
+                df_inad["NomeFantCli"] = df_inad["CodCli"].astype(str)
+                df_inad["RzsCli"] = ""
 
         df_a_vencer = db.query("""
             SELECT TOP 30
-                r.CodCli,
-                MAX(c.NomeFantCli)                AS NomeFantCli,
-                SUM(r.RcboLiquido)                AS a_vencer_total,
-                COUNT(*)                          AS qtd_titulos,
-                MIN(r.DtVcto)                     AS proximo_vencimento
-            FROM Blue.dbo.vmVendaXTipoRcbo r
-            LEFT JOIN (
-                SELECT DISTINCT CodCli, NomeFantCli
-                FROM Blue.dbo.vmVndDoc
-            ) c ON r.CodCli = c.CodCli
-            WHERE r.DtQuitacao IS NULL
-              AND r.DtVcto >= GETDATE()
-            GROUP BY r.CodCli
+                CodCli,
+                SUM(RcboLiquido)   AS a_vencer_total,
+                COUNT(*)           AS qtd_titulos,
+                MIN(DtVcto)        AS proximo_vencimento
+            FROM Blue.dbo.vmVendaXTipoRcbo
+            WHERE DtQuitacao IS NULL
+              AND DtVcto >= GETDATE()
+            GROUP BY CodCli
             ORDER BY proximo_vencimento ASC
         """)
+        if not df_a_vencer.empty:
+            _df_cli2 = db.query("""
+                SELECT DISTINCT CodCli, NomeFantCli
+                FROM Blue.dbo.vmVndDoc WHERE CodCli IS NOT NULL
+            """)
+            if not _df_cli2.empty:
+                _idx2 = _df_cli2.set_index("CodCli")["NomeFantCli"].to_dict()
+                df_a_vencer["NomeFantCli"] = df_a_vencer["CodCli"].map(
+                    lambda c: _idx2.get(c, str(c)))
+            else:
+                df_a_vencer["NomeFantCli"] = df_a_vencer["CodCli"].astype(str)
 
         df_pmr = db.query("""
             SELECT
@@ -652,9 +696,6 @@ class BotCRM(BaseBot):
                 v.CodCli,
                 MAX(v.NomeFantCli)                     AS nome_cliente,
                 MAX(v.RzsCli)                          AS razao_social,
-                MAX(v.UF)                              AS uf,
-                MAX(v.Munic)                           AS municipio,
-                MAX(v.CodSegCli)                       AS segmento,
                 MAX(v.DtVnd)                           AS ultima_compra,
                 DATEDIFF(day, MAX(v.DtVnd), GETDATE()) AS dias_sem_compra,
                 COUNT(DISTINCT v.NrDoc)                AS total_pedidos,

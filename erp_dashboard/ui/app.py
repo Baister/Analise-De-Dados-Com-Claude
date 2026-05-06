@@ -250,6 +250,81 @@ class Tabela(ctk.CTkScrollableFrame):
             self._rows.append(rw)
 
 
+class TabelaVendMeta(ctk.CTkScrollableFrame):
+    """Tabela de vendedores com coluna de meta individual editável por linha."""
+
+    _HDRS = ["Vendedor", "Faturamento", "Pedidos", "Ticket Médio",
+             "Meta Individual", "% Meta", "Devoluções"]
+
+    def __init__(self, master, on_meta_change, **kw):
+        super().__init__(master, fg_color=C["card"], corner_radius=10,
+                         border_width=1, border_color=C["card_border"], **kw)
+        self._on_meta_change = on_meta_change
+        self._rows: list = []
+        for j, col in enumerate(self._HDRS):
+            ctk.CTkLabel(self, text=col.upper(),
+                         font=ctk.CTkFont(size=9, weight="bold"),
+                         text_color=C["subtext"]).grid(row=0, column=j, padx=8, pady=(8, 4), sticky="w")
+
+    def populate(self, vendedores: list, meta_tot: float, metas_ind: dict):
+        for row_ws in self._rows:
+            for w in row_ws:
+                w.destroy()
+        self._rows.clear()
+        n = len(vendedores)
+        default = meta_tot / n if n else 0
+        for i, r in enumerate(vendedores, start=1):
+            cod  = str(r.get("CodVend", ""))
+            fat  = float(r.get("total_venda", 0) or 0)
+            meta = metas_ind.get(cod, default)
+            pct  = round(fat / meta * 100, 1) if meta else 0
+            cor_pct = C["success"] if pct >= 100 else C["warning"] if pct >= 80 else C["accent_verm"]
+            qtd_dev = int(r.get("qtd_devolucoes", 0) or 0)
+            rw = []
+
+            for j, (txt, tc) in enumerate([
+                (str(r.get("Vendedor", ""))[:20], C["text"]),
+                (_brl(fat),                        C["accent_azul"]),
+                (_num(r.get("qtd_pedidos", 0)),    C["text"]),
+                (_brl(r.get("ticket_medio", 0)),   C["text"]),
+            ]):
+                lbl = ctk.CTkLabel(self, text=txt, font=ctk.CTkFont(size=10), text_color=tc)
+                lbl.grid(row=i, column=j, padx=8, pady=2, sticky="w")
+                rw.append(lbl)
+
+            # Meta editável
+            mv = ctk.StringVar(value=f"{meta:,.0f}".replace(",", "."))
+            ent = ctk.CTkEntry(self, textvariable=mv, width=110, height=24,
+                                fg_color=C["progress_bg"], border_color=C["card_border"],
+                                text_color=C["text"], font=ctk.CTkFont(size=10))
+            ent.grid(row=i, column=4, padx=8, pady=2, sticky="w")
+
+            def _confirm(event=None, c=cod, v=mv, mt=meta_tot):
+                raw = v.get().replace(".", "").replace(",", ".")
+                try:
+                    val = min(max(float(raw), 0.0), mt)
+                    v.set(f"{val:,.0f}".replace(",", "."))
+                    self._on_meta_change(c, val)
+                except ValueError:
+                    pass
+
+            ent.bind("<Return>", _confirm)
+            ent.bind("<FocusOut>", _confirm)
+            rw.append(ent)
+
+            # % meta
+            pl = ctk.CTkLabel(self, text=f"{pct}%", font=ctk.CTkFont(size=10), text_color=cor_pct)
+            pl.grid(row=i, column=5, padx=8, pady=2, sticky="w")
+            rw.append(pl)
+
+            # Devoluções
+            dl = ctk.CTkLabel(self, text=str(qtd_dev), font=ctk.CTkFont(size=10),
+                               text_color=C["accent_verm"] if qtd_dev > 0 else C["subtext"])
+            dl.grid(row=i, column=6, padx=8, pady=2, sticky="w")
+            rw.append(dl)
+            self._rows.append(rw)
+
+
 def _secao(master, texto: str):
     ctk.CTkLabel(master, text=texto,
                  font=ctk.CTkFont(size=12, weight="bold"),
@@ -470,6 +545,8 @@ class TelaDashboard(ctk.CTkFrame):
 class TelaVendas(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
+        self._metas_ind: dict[str, float] = {}
+        self._ultimo_vend_dados: list = []
         self._build()
         threading.Thread(target=self._carregar_planos, daemon=True).start()
 
@@ -544,14 +621,17 @@ class TelaVendas(ctk.CTkFrame):
         self.g_grupo.pack(side="left", fill="both", expand=True)
 
         # ── Tabela de vendedores ───────────────────────────────────────
-        _secao(self, "TOP VENDEDORES — META DISTRIBUÍDA IGUALMENTE")
-        self.tab_vend = Tabela(
-            self,
-            ["Vendedor", "total_venda", "qtd_pedidos", "ticket_medio",
-             "meta_individual", "pct_meta"],
-            height=200,
+        _secao(self, "TOP VENDEDORES — clique em Meta Individual para editar (máx = meta do Dashboard)")
+        self.tab_vend = TabelaVendMeta(
+            self, on_meta_change=self._on_meta_change, height=220,
         )
         self.tab_vend.pack(fill="x")
+
+    def _on_meta_change(self, cod_vend: str, nova_meta: float):
+        self._metas_ind[cod_vend] = nova_meta
+        if self._ultimo_vend_dados:
+            meta_tot = ALERTAS.get("meta_faturamento_mensal", 400000)
+            self.tab_vend.populate(self._ultimo_vend_dados, meta_tot, self._metas_ind)
 
     def _carregar_planos(self):
         import time as _t
@@ -615,17 +695,15 @@ class TelaVendas(ctk.CTkFrame):
 
         vendedores = dados.get("por_vendedor", [])
         if vendedores:
-            n        = len(vendedores)
+            self._ultimo_vend_dados = vendedores
             meta_tot = ALERTAS.get("meta_faturamento_mensal", 400000)
-            meta_ind = meta_tot / n if n else 0
-            tabela   = []
+            n = len(vendedores)
+            default = meta_tot / n if n else 0
             for r in vendedores:
-                fat = float(r.get("total_venda", 0) or 0)
-                pct = round(fat / meta_ind * 100, 1) if meta_ind else 0
-                tabela.append({**r,
-                                "meta_individual": _brl(meta_ind),
-                                "pct_meta":        f"{pct}%"})
-            self.tab_vend.populate(tabela)
+                cod = str(r.get("CodVend", ""))
+                if cod not in self._metas_ind:
+                    self._metas_ind[cod] = default
+            self.tab_vend.populate(vendedores, meta_tot, self._metas_ind)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -926,7 +1004,8 @@ class TelaCRM(ctk.CTkFrame):
         ).pack(side="left", padx=4)
         self.tab_inat = Tabela(
             self,
-            ["nome_cliente", "uf", "municipio", "ultima_compra", "dias_sem_compra", "ticket_medio"],
+            ["nome_cliente", "razao_social", "ultima_compra", "dias_sem_compra",
+             "total_pedidos", "ticket_medio"],
             height=200,
         )
         self.tab_inat.pack(fill="x")
