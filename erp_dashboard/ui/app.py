@@ -11,7 +11,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import threading
 from datetime import datetime
 
-from config.settings import APP_TITLE, APP_VERSION, CORES, DB_CONFIG, ALERTAS
+from config.settings import APP_TITLE, APP_VERSION, CORES, DB_CONFIG, ALERTAS, FILIAL_EXCLUIR
 from core.database import db
 from bots.analise_bots import BotManager
 from core.exportador import exportar_excel
@@ -409,6 +409,8 @@ class TelaDashboard(ctk.CTkFrame):
         row2.pack(fill="both", expand=True, pady=(0, 6))
         self.g_diario = Grafico(row2, "Faturamento Diário (30 dias)")
         self.g_diario.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        self.g_marcas = Grafico(row2, "Marcas Mais Vendidas — Mês (com Margem)")
+        self.g_marcas.pack(side="left", fill="both", expand=True, padx=(0, 6))
         self.g_vend = Grafico(row2, "Top Vendedores do Mês")
         self.g_vend.pack(side="left", fill="both", expand=True)
 
@@ -446,6 +448,14 @@ class TelaDashboard(ctk.CTkFrame):
             lbs = [str(r.get("dia", ""))[-5:] for r in diario]
             vs  = [float(r.get("faturamento", 0) or 0) for r in diario]
             self.g_diario.linha(lbs, vs)
+
+        marcas = dados.get("marcas_mes", [])
+        if marcas:
+            lbs  = [str(r.get("DescrMarca", "?"))[:14] for r in marcas]
+            vs   = [float(r.get("faturamento", 0) or 0) for r in marcas]
+            mgns = [float(r.get("margem_bruta", 0) or 0) for r in marcas]
+            lbs_fmt = [f"{l} | Mg {_brl0(m)}" for l, m in zip(lbs, mgns)]
+            self.g_marcas.donut(lbs_fmt, vs)
 
         vend = dados.get("top_vendedores", [])
         if vend:
@@ -818,9 +828,33 @@ class TelaFinanceiro(ctk.CTkFrame):
 
         col_r = ctk.CTkFrame(row2, fg_color="transparent")
         col_r.pack(side="left", fill="both", expand=True)
-        _secao(col_r, "TOP INADIMPLENTES")
-        self.tab_inad = Tabela(col_r, ["NomeFantCli", "divida_total", "qtd_titulos", "max_dias_atraso"], height=260)
+
+        self._tabs_fin = ctk.CTkTabview(
+            col_r,
+            fg_color=C["card"],
+            segmented_button_fg_color=C["sidebar"],
+            segmented_button_selected_color=C["accent_azul"],
+            segmented_button_unselected_color=C["sidebar"],
+            segmented_button_selected_hover_color=C["accent_azul"],
+            text_color=C["text"],
+        )
+        self._tabs_fin.pack(fill="both", expand=True)
+
+        tab_in = self._tabs_fin.add("Inadimplentes")
+        self.tab_inad = Tabela(
+            tab_in,
+            ["NomeFantCli", "divida_total", "qtd_titulos", "max_dias_atraso"],
+            height=220,
+        )
         self.tab_inad.pack(fill="both", expand=True)
+
+        tab_av = self._tabs_fin.add("A Vencer")
+        self.tab_a_vencer = Tabela(
+            tab_av,
+            ["NomeFantCli", "a_vencer_total", "qtd_titulos", "proximo_vencimento"],
+            height=220,
+        )
+        self.tab_a_vencer.pack(fill="both", expand=True)
 
     def refresh(self, dados: dict):
         self.k_rec.update(_brl(dados.get("recebido_mes", 0)))
@@ -837,7 +871,8 @@ class TelaFinanceiro(ctk.CTkFrame):
             vs  = [float(r.get("total", 0) or 0) for r in tipos]
             self.g_tipo.donut(lbs, vs)
 
-        self.tab_inad.populate(dados.get("top_inadimplentes", [])[:20])
+        self.tab_inad.populate(dados.get("top_inadimplentes", [])[:50])
+        self.tab_a_vencer.populate(dados.get("a_vencer_lista", [])[:30])
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -846,6 +881,8 @@ class TelaFinanceiro(ctk.CTkFrame):
 class TelaCRM(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
+        self._inativos_dados: list = []
+        self._sort_desc: bool = True
         self._build()
 
     def _build(self):
@@ -871,13 +908,40 @@ class TelaCRM(ctk.CTkFrame):
         self.g_vend_status = Grafico(row3, "Status dos Vendedores — Meta vs Realizado")
         self.g_vend_status.pack(fill="both", expand=True)
 
-        _secao(self, "CLIENTES INATIVOS / EM RISCO (lista exportável)")
+        _secao(self, "CLIENTES INATIVOS / EM RISCO (30-60-90-120+ dias)")
+        sort_bar = ctk.CTkFrame(self, fg_color="transparent")
+        sort_bar.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(sort_bar, text="Ordenar por dias sem compra:",
+                     text_color=C["subtext"], font=ctk.CTkFont(size=10)).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            sort_bar, text="↓ Mais inativos primeiro", width=160, height=26,
+            fg_color=C["accent_verm"], text_color=C["text"], font=ctk.CTkFont(size=10),
+            command=lambda: self._aplicar_sort(True),
+        ).pack(side="left", padx=4)
+        ctk.CTkButton(
+            sort_bar, text="↑ Mais recentes primeiro", width=160, height=26,
+            fg_color=C["progress_bg"], text_color=C["subtext"], font=ctk.CTkFont(size=10),
+            border_width=1, border_color=C["card_border"],
+            command=lambda: self._aplicar_sort(False),
+        ).pack(side="left", padx=4)
         self.tab_inat = Tabela(
             self,
             ["nome_cliente", "uf", "municipio", "ultima_compra", "dias_sem_compra", "ticket_medio"],
             height=200,
         )
         self.tab_inat.pack(fill="x")
+
+    def _aplicar_sort(self, desc: bool):
+        self._sort_desc = desc
+        self._repopular_inat()
+
+    def _repopular_inat(self):
+        dados = sorted(
+            self._inativos_dados,
+            key=lambda r: float(r.get("dias_sem_compra", 0) or 0),
+            reverse=self._sort_desc,
+        )
+        self.tab_inat.populate(dados[:150])
 
     def refresh(self, dados: dict):
         self.k_vorc.update(_brl(dados.get("valor_orcado", 0)))
@@ -915,7 +979,8 @@ class TelaCRM(ctk.CTkFrame):
             cores = [_cor_map.get(l, C["accent_azul"]) for l in lbs]
             self.g_vend_status.donut(lbs, vs, cores=cores)
 
-        self.tab_inat.populate(dados.get("inativos_lista", [])[:100])
+        self._inativos_dados = dados.get("inativos_lista", [])
+        self._repopular_inat()
 
 
 # ──────────────────────────────────────────────────────────────────

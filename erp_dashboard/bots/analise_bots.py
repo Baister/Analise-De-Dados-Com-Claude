@@ -8,17 +8,19 @@ import threading
 import time
 import logging
 from datetime import datetime
-from config.settings import BOT_INTERVALS, ALERTAS
+from config.settings import BOT_INTERVALS, ALERTAS, FILIAL_EXCLUIR
 from core.database import db
 
 logger = logging.getLogger(__name__)
 
-MAX          = ALERTAS.get("query_max_rows", 5000)
-DIAS_RISCO   = ALERTAS.get("cliente_em_risco_dias", 60)
-DIAS_INATIVO = ALERTAS.get("cliente_inativo_dias", 90)
-DIAS_CRITICO = ALERTAS.get("estoque_critico_dias_sem_vnd", 90)
-_MES_INI     = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)"
-_MES_FIM     = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)"
+MAX             = ALERTAS.get("query_max_rows", 5000)
+DIAS_RISCO      = ALERTAS.get("cliente_em_risco_dias", 60)
+DIAS_INATIVO    = ALERTAS.get("cliente_inativo_dias", 90)
+DIAS_CRITICO    = ALERTAS.get("estoque_critico_dias_sem_vnd", 90)
+DIAS_LISTA_INAT = 30  # mostra inativos a partir de 30 dias
+_MES_INI        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)"
+_MES_FIM        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)"
+_FILTRO_FILIAL  = f"AND v.CodFilial <> '{FILIAL_EXCLUIR}'" if FILIAL_EXCLUIR else ""
 
 
 def _safe_float(df: pd.DataFrame, col: str) -> float:
@@ -101,6 +103,7 @@ class BotDashboard(BaseBot):
               AND v.DtVnd <  {_MES_FIM}
               AND d.Cancelado    = ''
               AND d.Fat          = 1
+              {_FILTRO_FILIAL}
         """)
 
         df_vend = db.query(f"""
@@ -116,6 +119,7 @@ class BotDashboard(BaseBot):
               AND v.DtVnd <  {_MES_FIM}
               AND d.Cancelado = ''
               AND d.Fat = 1
+              {_FILTRO_FILIAL}
             GROUP BY v.Vendedor, v.CodVend
             ORDER BY total_venda DESC
         """)
@@ -129,8 +133,23 @@ class BotDashboard(BaseBot):
             WHERE v.DtVnd >= DATEADD(day, -30, GETDATE())
               AND d.Cancelado = ''
               AND d.Fat = 1
+              {_FILTRO_FILIAL}
             GROUP BY CONVERT(date, v.DtVnd)
             ORDER BY dia
+        """)
+
+        df_marcas = db.query(f"""
+            SELECT TOP 8
+                i.DescrMarca,
+                SUM(i.PrecoVndTotItem)                           AS faturamento,
+                SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem) AS margem_bruta
+            FROM Blue.dbo.vmVndItemDoc i
+            WHERE i.DtVnd >= {_MES_INI}
+              AND i.DtVnd <  {_MES_FIM}
+              AND i.Fat = 1
+              AND i.DescrMarca IS NOT NULL
+            GROUP BY i.DescrMarca
+            ORDER BY faturamento DESC
         """)
 
         fat  = _safe_float(df_kpi, "faturamento_atual")
@@ -146,6 +165,7 @@ class BotDashboard(BaseBot):
             "meta_mensal":        meta,
             "top_vendedores":     df_vend.to_dict("records"),
             "faturamento_diario": df_diario.to_dict("records"),
+            "marcas_mes":         df_marcas.to_dict("records"),
         }
 
 
@@ -188,6 +208,7 @@ class BotVendas(BaseBot):
             WHERE d.Cancelado = '' AND d.Fat = 1
               AND {filtro_v}
               {filtro_plano_v}
+              {_FILTRO_FILIAL}
         """)
 
         df_marca = db.query(f"""
@@ -277,7 +298,7 @@ class BotEstoque(BaseBot):
                 SUM(CASE WHEN QtdEstqDisp <= 0 THEN 1 ELSE 0 END) AS itens_zerados,
                 SUM(CASE WHEN ISNULL(DATEDIFF(day, DtUltVnd, GETDATE()), 9999) > {DIAS_CRITICO}
                          THEN 1 ELSE 0 END) AS itens_sem_giro
-            FROM Blue.dbo.vmAnaliseEstqItem
+            FROM Blue.dbo.vmAnaliseEstqVnd
             WHERE QtdEstq > 0
         """)
 
@@ -298,7 +319,7 @@ class BotEstoque(BaseBot):
                 e.VlrEstq,
                 e.QtdPendPedCmp,
                 e.FornecUltCmp
-            FROM Blue.dbo.vmAnaliseEstqItem e
+            FROM Blue.dbo.vmAnaliseEstqVnd e
             WHERE ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) > {DIAS_CRITICO}
                OR e.QtdEstqDisp <= 0
             ORDER BY ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 9999) DESC,
@@ -315,7 +336,7 @@ class BotEstoque(BaseBot):
                          ELSE ISNULL(DATEDIFF(day, e.DtUltVnd, GETDATE()), 0)
                     END)                                                           AS media_dias_sem_venda,
                 SUM(e.QtdEstq)                                                 AS quantidade_total
-            FROM Blue.dbo.vmAnaliseEstqItem e
+            FROM Blue.dbo.vmAnaliseEstqVnd e
             GROUP BY e.DescrMarca
             ORDER BY valor_estoque DESC
         """)
@@ -344,7 +365,7 @@ class BotEstoque(BaseBot):
                 e.VlrEstq,
                 ISNULL(v.qtd_vendida_90d, 0) AS qtd_vendida_90d,
                 ISNULL(v.val_vendido_90d,  0) AS val_vendido_90d
-            FROM Blue.dbo.vmAnaliseEstqItem e
+            FROM Blue.dbo.vmAnaliseEstqVnd e
             LEFT JOIN (
                 SELECT i.CodItem,
                        SUM(i.QtdItem)         AS qtd_vendida_90d,
@@ -368,7 +389,7 @@ class BotEstoque(BaseBot):
                 e.QtdEstqDisp,
                 ISNULL(o.qtd_orcada, 0) AS qtd_orcada,
                 ISNULL(o.val_orcado,  0) AS val_orcado
-            FROM Blue.dbo.vmAnaliseEstqItem e
+            FROM Blue.dbo.vmAnaliseEstqVnd e
             LEFT JOIN (
                 SELECT i.CodItem,
                        SUM(i.QtdItem)         AS qtd_orcada,
@@ -416,7 +437,7 @@ class BotEstoque(BaseBot):
                 END AS semanas_cobertura
             FROM Blue.dbo.vmVndItemDoc i
             INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
-            LEFT JOIN Blue.dbo.vmAnaliseEstqItem e ON i.CodItem = e.CodItem
+            LEFT JOIN Blue.dbo.vmAnaliseEstqVnd e ON i.CodItem = e.CodItem
             WHERE d.Cancelado = '' AND i.Fat = 1
               AND i.DtVnd >= DATEADD(day, -90, GETDATE())
             GROUP BY i.CodItem
@@ -487,26 +508,48 @@ class BotFinanceiro(BaseBot):
 
         df_inad = db.query("""
             SELECT TOP 50
-                CodigoCli,
-                NomeFantCli,
-                RzsCli,
-                SUM(RcboLiquido)                       AS divida_total,
+                r.CodCli,
+                MAX(c.NomeFantCli)                     AS NomeFantCli,
+                MAX(c.RzsCli)                          AS RzsCli,
+                SUM(r.RcboLiquido)                     AS divida_total,
                 COUNT(*)                               AS qtd_titulos,
-                MAX(DATEDIFF(day, DtVcto, GETDATE()))  AS max_dias_atraso
-            FROM Blue.dbo.vmVendaXTipoRcbo
-            WHERE DtQuitacao IS NULL
-              AND DtVcto < GETDATE()
-            GROUP BY CodigoCli, NomeFantCli, RzsCli
+                MAX(DATEDIFF(day, r.DtVcto, GETDATE())) AS max_dias_atraso
+            FROM Blue.dbo.vmVendaXTipoRcbo r
+            LEFT JOIN (
+                SELECT DISTINCT CodCli, NomeFantCli, RzsCli
+                FROM Blue.dbo.vmVndDoc
+            ) c ON r.CodCli = c.CodCli
+            WHERE r.DtQuitacao IS NULL
+              AND r.DtVcto < GETDATE()
+            GROUP BY r.CodCli
             ORDER BY divida_total DESC
+        """)
+
+        df_a_vencer = db.query("""
+            SELECT TOP 30
+                r.CodCli,
+                MAX(c.NomeFantCli)                AS NomeFantCli,
+                SUM(r.RcboLiquido)                AS a_vencer_total,
+                COUNT(*)                          AS qtd_titulos,
+                MIN(r.DtVcto)                     AS proximo_vencimento
+            FROM Blue.dbo.vmVendaXTipoRcbo r
+            LEFT JOIN (
+                SELECT DISTINCT CodCli, NomeFantCli
+                FROM Blue.dbo.vmVndDoc
+            ) c ON r.CodCli = c.CodCli
+            WHERE r.DtQuitacao IS NULL
+              AND r.DtVcto >= GETDATE()
+            GROUP BY r.CodCli
+            ORDER BY proximo_vencimento ASC
         """)
 
         df_pmr = db.query("""
             SELECT
-                AVG(CAST(DATEDIFF(day, v.DtVnd, r.DtQuitacao) AS float)) AS prazo_medio
-            FROM Blue.dbo.vmVendaXTipoRcbo r
-            INNER JOIN Blue.dbo.vmVndDoc v ON r.Documento = v.Documento
-            WHERE r.DtQuitacao IS NOT NULL
-              AND r.DtQuitacao >= DATEADD(day, -90, GETDATE())
+                AVG(CAST(DATEDIFF(day, DtLctoCtRec, DtQuitacao) AS float)) AS prazo_medio
+            FROM Blue.dbo.vmVendaXTipoRcbo
+            WHERE DtQuitacao IS NOT NULL
+              AND DtQuitacao >= DATEADD(day, -90, GETDATE())
+              AND DtLctoCtRec IS NOT NULL
         """)
 
         return {
@@ -517,6 +560,7 @@ class BotFinanceiro(BaseBot):
             "prazo_medio_receb":    round(_safe_float(df_pmr, "prazo_medio"), 1),
             "por_tipo_recebimento": df_tipo.to_dict("records"),
             "top_inadimplentes":    df_inad.to_dict("records"),
+            "a_vencer_lista":       df_a_vencer.to_dict("records"),
             "total_inadimplencia":  float(df_inad["divida_total"].sum()) if not df_inad.empty else 0.0,
             "qtd_inadimplentes":    len(df_inad),
         }
@@ -618,7 +662,7 @@ class BotCRM(BaseBot):
                 AVG(v.ValVndTotal)                     AS ticket_medio
             FROM Blue.dbo.vmVndDoc v
             GROUP BY v.CodCli
-            HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) >= {DIAS_RISCO}
+            HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) >= {DIAS_LISTA_INAT}
             ORDER BY dias_sem_compra DESC
         """)
 
