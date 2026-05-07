@@ -1,4 +1,4 @@
-import os, sys, json, tempfile, pytest
+import os, sys, pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from core.cache import CacheManager
