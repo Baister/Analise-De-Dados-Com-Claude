@@ -3,7 +3,16 @@
     "allow": [
       "PowerShell(& \"C:/Users/Gustavo/AppData/Local/Programs/Python/Python313/python.exe\" -m pip install customtkinter pyodbc pandas numpy matplotlib pillow openpyxl 2>&1)",
       "PowerShell(& \"C:/Users/Gustavo/AppData/Local/Programs/Python/Python313/python.exe\" -c \"import customtkinter; import pyodbc; print\\('OK - customtkinter:', customtkinter.__version__, '| pyodbc:', pyodbc.version\\)\" 2>&1)",
-      "PowerShell(& \"C:/Users/Gustavo/AppData/Local/Programs/Python/Python313/python.exe\" main.py 2>&1)"
+      "PowerShell(& \"C:/Users/Gustavo/AppData/Local/Programs/Python/Python313/python.exe\" main.py 2>&1)",
+      "Bash(python)",
+      "Bash(python -m pytest tests/ -v --tb=short)",
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(python -c \"from bots.analise_bots import BotManager, HubPollerBot; print\\('Imports OK'\\); bm=BotManager\\(use_hub=True\\); print\\('Hub mode instantiation OK'\\); bm2=BotManager\\(\\); print\\('Default mode instantiation OK'\\)\")",
+      "Bash(pip install *)",
+      "Bash(python -m pytest tests/test_hub_api.py -v)",
+      "Bash(python -m pytest tests/test_hub_api.py -v --tb=short)"
     ],
     "deny": [
       "Bash(rm *)",
