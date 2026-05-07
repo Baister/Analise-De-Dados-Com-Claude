@@ -876,6 +876,21 @@ class BotCRM(BaseBot):
 
 
 # ──────────────────────────────────────────────────────────────────
+#  HUB POLLER BOT  — Polls hub REST API (client-side integration)
+# ──────────────────────────────────────────────────────────────────
+class HubPollerBot(BaseBot):
+    """Replaces a real bot on client machines — polls the hub REST API."""
+
+    def __init__(self, name_label: str):
+        super().__init__(name_label)
+
+    def analisar(self) -> dict:
+        from core.data_client import data_client
+        data = data_client.fetch(self.name_label)
+        return data or {}
+
+
+# ──────────────────────────────────────────────────────────────────
 #  GERENCIADOR
 # ──────────────────────────────────────────────────────────────────
 class BotManager:
