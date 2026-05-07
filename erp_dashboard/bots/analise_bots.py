@@ -894,14 +894,20 @@ class HubPollerBot(BaseBot):
 #  GERENCIADOR
 # ──────────────────────────────────────────────────────────────────
 class BotManager:
-    def __init__(self):
-        self.bots: dict[str, BaseBot] = {
-            "dashboard":  BotDashboard(),
-            "vendas":     BotVendas(),
-            "estoque":    BotEstoque(),
-            "financeiro": BotFinanceiro(),
-            "crm":        BotCRM(),
-        }
+    def __init__(self, use_hub: bool = False):
+        if use_hub:
+            self.bots: dict[str, BaseBot] = {
+                name: HubPollerBot(name)
+                for name in ("dashboard", "vendas", "estoque", "financeiro", "crm")
+            }
+        else:
+            self.bots: dict[str, BaseBot] = {
+                "dashboard":  BotDashboard(),
+                "vendas":     BotVendas(),
+                "estoque":    BotEstoque(),
+                "financeiro": BotFinanceiro(),
+                "crm":        BotCRM(),
+            }
 
     def load_from_cache(self):
         """Fire registered callbacks with last-known cache data for instant startup."""
