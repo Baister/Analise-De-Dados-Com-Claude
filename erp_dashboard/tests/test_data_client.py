@@ -40,3 +40,12 @@ def test_fetch_returns_none_when_hub_down_and_no_cache(dc):
     with patch("core.data_client.requests.get", side_effect=req.exceptions.ConnectionError):
         result = dc.fetch("crm")
     assert result is None
+
+def test_fetch_falls_back_to_cache_on_invalid_json(dc):
+    dc._cache.save("dashboard", {"kpi": [1]})
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.side_effect = ValueError("Invalid JSON")
+    with patch("core.data_client.requests.get", return_value=mock_resp):
+        result = dc.fetch("dashboard")
+    assert result["kpi"] == [1]

@@ -17,8 +17,8 @@ class DataClient:
             if resp.status_code == 200:
                 return resp.json()
             logging.warning("Hub returned %s for %s", resp.status_code, bot_name)
-        except requests.exceptions.RequestException as exc:
-            logging.warning("Hub unreachable (%s), falling back to cache", exc)
+        except (requests.exceptions.RequestException, ValueError) as exc:
+            logging.warning("Hub error (%s), falling back to cache", exc)
         return self._cache.load(bot_name)
 
 
