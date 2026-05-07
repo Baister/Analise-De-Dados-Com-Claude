@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 from config.settings import BOT_INTERVALS, ALERTAS, PLANO_EXCLUIR_FAT
 from core.database import db
+from core.cache import cache as _cache
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,10 @@ class BaseBot(threading.Thread):
                 cb(self.name_label, self.resultado)
             except Exception as e:
                 logger.warning("Callback error [%s]: %s", self.name_label, e)
+        try:
+            _cache.save(self.name_label, self.resultado)
+        except Exception as e:
+            logger.warning("cache.save error for %s: %s", self.name_label, e)
 
     def run(self):
         logger.info("Bot [%s] iniciado. Intervalo: %ds", self.name_label, self.interval)
@@ -387,12 +392,12 @@ class BotEstoque(BaseBot):
                            et, self._s.get(et, []))
 
         smov     = self._s.get("mov", [])
-        col_mcod = self._c("mov", "CodItem",      "Codigo")
-        col_mdsc = self._c("mov", "DescrItem",    "Descricao",  "NomeItem")
-        col_ment = self._c("mov", "QtdEntrada",   "Entrada",    "Qtd_Entrada")
-        col_msai = self._c("mov", "QtdSaida",     "Saida",      "Qtd_Saida")
-        col_mliq = self._c("mov", "QtdLiqVendas", "QtdLiq",     "Liquido")
-        col_mdt  = self._c("mov", "DtMovEstq",    "DtMov",      "Data",  "DtMovimento")
+        col_mcod = self._c("mov", "CodItem",      "Codigo",      "CodProduto",    "CodigoItem",  "CodItm")
+        col_mdsc = self._c("mov", "DescrItem",    "Descricao",  "NomeItem",      "DescrProduto","NomeProduto", "DescrProd")
+        col_ment = self._c("mov", "QtdEntrada",   "Entrada",    "Qtd_Entrada",   "QtdEntradas", "TotEntrada",  "EntradaQtd",  "SaldoEntrada", "QtdEnt")
+        col_msai = self._c("mov", "QtdSaida",     "Saida",      "Qtd_Saida",     "QtdSaidas",   "TotSaida",    "SaidaQtd",    "SaldoSaida",   "QtdSai", "QtdLiqVendas", "QtdLiq")
+        col_mliq = self._c("mov", "QtdLiqVendas", "QtdLiq",     "Liquido",       "QtdLiquido",  "LiqVnd")
+        col_mdt  = self._c("mov", "DtMovEstq",    "DtMov",      "Data",          "DtMovimento", "DtMov",       "DataMov")
 
         def _sum(col, alias):
             return f"SUM(ISNULL({col},0)) AS {alias}" if col else f"0 AS {alias}"
@@ -429,13 +434,14 @@ class BotEstoque(BaseBot):
             f"e.{col_forn} AS FornecUltCmp"  if col_forn else None,
         ]))
         _wd = (f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999)>{DIAS_CRITICO}"
-               if col_dtv else "1=0")
-        _wz = f"e.{col_disp}<=0" if col_disp else "1=0"
+               if col_dtv else "")
+        _wz = f"e.{col_disp}<=0" if col_disp else ""
         _od = f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999) DESC," if col_dtv else ""
         _ov = f"e.{col_vlr} DESC" if col_vlr else "1"
+        _where_crit = " OR ".join(filter(None, [_wd, _wz])) or "1=1"
         df_criticos = db.query(f"""
             SELECT TOP {MAX} {", ".join(_cp) if _cp else "e.*"}
-            FROM {ev} e WHERE {_wd} OR {_wz}
+            FROM {ev} e WHERE {_where_crit}
             ORDER BY {_od} {_ov}
         """)
 
@@ -463,15 +469,19 @@ class BotEstoque(BaseBot):
             """)
 
         df_venda_estq = pd.DataFrame()
-        if col_cod and col_disp:
+        if col_cod:
             _vep = [f"e.{col_cod} AS CodItem"]
             for _cx, _ax in [(col_dsc,"DescrItem"),(col_mrc,"DescrMarca"),
                               (col_qtd,"QtdEstq"),  (col_vlr,"VlrEstq")]:
                 if _cx:
                     _vep.append(f"e.{_cx} AS {_ax}")
-            _vep += [f"e.{col_disp} AS QtdEstqDisp",
-                     "ISNULL(v.qtd_vendida_90d,0) AS qtd_vendida_90d",
-                     "ISNULL(v.val_vendido_90d, 0) AS val_vendido_90d"]
+            _col_disp_ve = col_disp or col_qtd
+            _vep += [
+                f"ISNULL(e.{_col_disp_ve},0) AS QtdEstqDisp" if _col_disp_ve else "0 AS QtdEstqDisp",
+                "ISNULL(v.qtd_vendida_90d,0) AS qtd_vendida_90d",
+                "ISNULL(v.val_vendido_90d, 0) AS val_vendido_90d",
+            ]
+            _where_ve = f"WHERE ISNULL(e.{col_disp},0)>=0" if col_disp else ""
             df_venda_estq = db.query(f"""
                 SELECT TOP 30 {", ".join(_vep)}
                 FROM {ev} e
@@ -485,18 +495,21 @@ class BotEstoque(BaseBot):
                       AND i.DtVnd>=DATEADD(day,-90,GETDATE())
                     GROUP BY i.CodItem
                 ) v ON e.{col_cod}=v.CodItem
-                WHERE ISNULL(e.{col_disp},0)>=0
+                {_where_ve}
                 ORDER BY ISNULL(v.qtd_vendida_90d,0) DESC
             """)
 
         df_orc_estq = pd.DataFrame()
-        if col_cod and col_disp:
+        if col_cod:
             _oep = [f"e.{col_cod} AS CodItem"]
             if col_dsc: _oep.append(f"e.{col_dsc} AS DescrItem")
             if col_mrc: _oep.append(f"e.{col_mrc} AS DescrMarca")
-            _oep += [f"e.{col_disp} AS QtdEstqDisp",
-                     "ISNULL(o.qtd_orcada,0) AS qtd_orcada",
-                     "ISNULL(o.val_orcado, 0) AS val_orcado"]
+            _col_disp_oe = col_disp or col_qtd
+            _oep += [
+                f"ISNULL(e.{_col_disp_oe},0) AS QtdEstqDisp" if _col_disp_oe else "0 AS QtdEstqDisp",
+                "ISNULL(o.qtd_orcada,0) AS qtd_orcada",
+                "ISNULL(o.val_orcado, 0) AS val_orcado",
+            ]
             df_orc_estq = db.query(f"""
                 SELECT TOP 30 {", ".join(_oep)}
                 FROM {ev} e
@@ -504,11 +517,10 @@ class BotEstoque(BaseBot):
                     SELECT i.CodItem,
                            SUM(i.QtdItem)         AS qtd_orcada,
                            SUM(i.PrecoVndTotItem) AS val_orcado
-                    FROM Blue.dbo.TbOrcPedVnd p
-                    INNER JOIN Blue.dbo.vmVndItemDoc i ON p.NrOrcPedVnd=i.NrDoc
+                    FROM Blue.dbo.vmVndItemDoc i
+                    INNER JOIN Blue.dbo.TbOrcPedVnd p ON i.NrDoc=p.NrOrcPedVnd
                     WHERE p.OrcPedVnd=1
-                      AND p.DtOrcPedVnd>={_MES_INI}
-                      AND p.DtOrcPedVnd< {_MES_FIM}
+                      AND i.DtVnd>=DATEADD(day,-30,GETDATE())
                     GROUP BY i.CodItem
                 ) o ON e.{col_cod}=o.CodItem
                 WHERE ISNULL(o.qtd_orcada,0)>0
@@ -544,20 +556,22 @@ class BotEstoque(BaseBot):
                     if col_disp else "999")
             _msp.append(
                 f"CASE WHEN SUM(i.QtdItem)>0 THEN {_cov} ELSE 999 END AS semanas_cobertura")
+            # JOIN com estoque só quando há colunas úteis a buscar — evita fan-out quando
+            # ev = vmAnaliseEstqVnd (N linhas por item → distorce SUM(i.QtdItem))
+            _need_join_e = any([col_dsc, col_mrc, col_qtd, col_disp])
+            _join_e_ms   = f"LEFT JOIN {ev} e ON i.CodItem=e.{col_cod}" if _need_join_e else ""
             df_media_semanal = db.query(f"""
                 SELECT TOP {MAX} {", ".join(_msp)}
                 FROM Blue.dbo.vmVndItemDoc i
                 INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
-                LEFT JOIN {ev} e ON i.CodItem=e.{col_cod}
+                {_join_e_ms}
                 WHERE d.Cancelado='' AND i.Fat=1
                   AND i.DtVnd>=DATEADD(day,-90,GETDATE())
                 GROUP BY i.CodItem ORDER BY media_semanal DESC
             """)
 
-        df_sug = (db.query(f"SELECT TOP {MAX} * FROM Blue.dbo.vmSugestaoTransfEstq")
-                  if self._s.get("sug") else pd.DataFrame())
-        df_os  = (db.query("SELECT TOP 200 * FROM Blue.dbo.vwEstqTempOs")
-                  if self._s.get("os") else pd.DataFrame())
+        df_sug = db.query(f"SELECT TOP {MAX} * FROM Blue.dbo.vmSugestaoTransfEstq")
+        df_os  = db.query("SELECT TOP 200 * FROM Blue.dbo.vwEstqTempOs")
 
         def _recs(df):
             return df.to_dict("records") if not df.empty else []
