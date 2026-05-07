@@ -116,7 +116,7 @@ class Grafico(ctk.CTkFrame):
     def _attach_canvas(self, fig, canvas):
         self._fig = fig
         self._canvas = canvas
-        self._canvas.draw()
+        self._canvas.draw_idle()
         w = self._canvas.get_tk_widget()
         w.pack(fill="both", expand=True, padx=6, pady=6)
         w.bind("<Configure>", self._on_configure, add="+")
@@ -748,7 +748,7 @@ class TelaEstoque(ctk.CTkFrame):
         # ── Abas de análise ───────────────────────────────────────────
         self._tabs = ctk.CTkTabview(
             self,
-            fg_color=C["card"],
+            fg_color=C["bg"],
             segmented_button_fg_color=C["sidebar"],
             segmented_button_selected_color=C["accent_azul"],
             segmented_button_unselected_color=C["sidebar"],
@@ -942,7 +942,7 @@ class TelaFinanceiro(ctk.CTkFrame):
 
         self._tabs_fin = ctk.CTkTabview(
             col_r,
-            fg_color=C["card"],
+            fg_color=C["bg"],
             segmented_button_fg_color=C["sidebar"],
             segmented_button_selected_color=C["accent_azul"],
             segmented_button_unselected_color=C["sidebar"],
@@ -955,7 +955,7 @@ class TelaFinanceiro(ctk.CTkFrame):
         self.tab_inad = Tabela(
             tab_in,
             ["NomeFantCli", "divida_total", "qtd_titulos", "max_dias_atraso"],
-            height=220,
+            height=380,
         )
         self.tab_inad.pack(fill="both", expand=True)
 
@@ -963,7 +963,7 @@ class TelaFinanceiro(ctk.CTkFrame):
         self.tab_a_vencer = Tabela(
             tab_av,
             ["NomeFantCli", "a_vencer_total", "qtd_titulos", "proximo_vencimento"],
-            height=220,
+            height=380,
         )
         self.tab_a_vencer.pack(fill="both", expand=True)
 
@@ -1007,16 +1007,24 @@ class TelaCRM(ctk.CTkFrame):
         for k in (self.k_vorc, self.k_vcvt, self.k_conv, self.k_risco, self.k_inat):
             k.pack(side="left", fill="both", expand=True, padx=4)
 
-        row2 = ctk.CTkFrame(self, fg_color="transparent")
-        row2.pack(fill="both", expand=True, pady=(0, 10))
-        self.g_funil  = Grafico(row2, "Funil de Conversão (mês)")
-        self.g_funil.pack(side="left", fill="both", expand=True, padx=(0, 6))
-        self.g_faixas = Grafico(row2, "Clientes por Faixa de Inatividade")
-        self.g_faixas.pack(side="left", fill="both", expand=True)
-
-        row3 = ctk.CTkFrame(self, fg_color="transparent")
-        row3.pack(fill="x", pady=(0, 10))
-        self.g_vend_status = Grafico(row3, "Status dos Vendedores — Meta vs Realizado")
+        _tabs_crm_g = ctk.CTkTabview(
+            self,
+            fg_color=C["bg"],
+            segmented_button_fg_color=C["sidebar"],
+            segmented_button_selected_color=C["accent_azul"],
+            segmented_button_unselected_color=C["sidebar"],
+            segmented_button_selected_hover_color=C["accent_azul"],
+            text_color=C["text"],
+        )
+        _tabs_crm_g.pack(fill="both", expand=True, pady=(0, 8))
+        tg1 = _tabs_crm_g.add("Funil de Conversão")
+        self.g_funil = Grafico(tg1, "Funil de Conversão (mês)")
+        self.g_funil.pack(fill="both", expand=True)
+        tg2 = _tabs_crm_g.add("Faixas de Inatividade")
+        self.g_faixas = Grafico(tg2, "Clientes por Faixa de Inatividade")
+        self.g_faixas.pack(fill="both", expand=True)
+        tg3 = _tabs_crm_g.add("Status Vendedores")
+        self.g_vend_status = Grafico(tg3, "Status dos Vendedores — Meta vs Realizado")
         self.g_vend_status.pack(fill="both", expand=True)
 
         _secao(self, "CLIENTES INATIVOS / EM RISCO (30-60-90-120+ dias)")
