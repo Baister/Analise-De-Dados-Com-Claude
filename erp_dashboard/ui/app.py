@@ -11,7 +11,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import threading
 from datetime import datetime
 
-from config.settings import APP_TITLE, APP_VERSION, CORES, DB_CONFIG, ALERTAS
+from config.settings import APP_TITLE, APP_VERSION, CORES, DB_CONFIG, ALERTAS, IS_HUB, HUB_URL, HUB_PORT
 from core.database import db
 from bots.analise_bots import BotManager
 from core.exportador import exportar_excel
@@ -1166,7 +1166,8 @@ class ERPDashboard(ctk.CTk):
         self.configure(fg_color=C["bg"])
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-        self.bot_manager = BotManager()
+        # use_hub=True only when this machine is NOT the hub AND a hub URL is configured
+        self.bot_manager = BotManager(use_hub=(not IS_HUB and bool(HUB_URL)))
         self._telas: dict[str, ctk.CTkFrame] = {}
         self._sidebar_btns: dict[str, ctk.CTkButton] = {}
         self._tela_atual = ""
@@ -1289,37 +1290,59 @@ class ERPDashboard(ctk.CTk):
     def _connect_and_start(self):
         self._register_callbacks()          # register UI callbacks on main thread
         self.bot_manager.load_from_cache()  # now callbacks exist, instant display works
-        def task():
-            ok = db.connect()
-            if not ok:
-                self.after(0, lambda: self._lbl_status.configure(
-                    text=f"● Erro — DSN: {DB_CONFIG['dsn']}", text_color=C["accent_verm"]))
-                self.after(0, lambda: messagebox.showerror(
-                    "Erro de Conexão",
-                    f"Não foi possível conectar via DSN '{DB_CONFIG['dsn']}'.\n"
-                    "Verifique usuário/senha em config/settings.py",
-                ))
-                return
 
-            # Testa acesso real ao banco Blue antes de iniciar os bots
-            df_test = db.query("SELECT TOP 1 NrDoc FROM Blue.dbo.vmVndDoc")
-            if df_test.empty and db.last_error:
-                msg = f"● Conectado | Blue inacessível: {db.last_error[:60]}"
-                self.after(0, lambda m=msg: self._lbl_status.configure(
-                    text=m, text_color=C["warning"]))
-                self.after(0, lambda: messagebox.showwarning(
-                    "Aviso de Acesso",
-                    f"Conexão estabelecida, mas a query de teste falhou:\n\n{db.last_error}\n\n"
-                    "Verifique se o DSN aponta para o banco correto e se o usuário tem permissão.",
-                ))
-            else:
-                self.after(0, lambda: self._lbl_status.configure(
-                    text="● Conectado ao Blue", text_color=C["success"]))
+        if IS_HUB:
+            # Hub mode: start real bots + REST server in background thread
+            def hub_task():
+                import uvicorn
+                import hub.server as _hs
+                _hs._manager = self.bot_manager
+                self.bot_manager.start_all()
+                uvicorn.run(_hs.app, host="0.0.0.0", port=HUB_PORT, log_level="warning")
+            t = threading.Thread(target=hub_task, daemon=True)
+            t.start()
+            self.after(0, lambda: self._lbl_status.configure(
+                text=f"● Hub ativo — porta {HUB_PORT}", text_color=C["success"]))
 
-            # self._register_callbacks() — moved to main thread before load_from_cache()
+        elif HUB_URL:
+            # Client mode: HubPollerBots poll hub; no direct DB connection needed
             self.bot_manager.start_all()
+            self.after(0, lambda: self._lbl_status.configure(
+                text=f"● Cliente conectado ao hub {HUB_URL}", text_color=C["success"]))
 
-        threading.Thread(target=task, daemon=True).start()
+        else:
+            # Standalone mode: original behavior — connect to DB + start real bots
+            def task():
+                ok = db.connect()
+                if not ok:
+                    self.after(0, lambda: self._lbl_status.configure(
+                        text=f"● Erro — DSN: {DB_CONFIG['dsn']}", text_color=C["accent_verm"]))
+                    self.after(0, lambda: messagebox.showerror(
+                        "Erro de Conexão",
+                        f"Não foi possível conectar via DSN '{DB_CONFIG['dsn']}'.\n"
+                        "Verifique usuário/senha em config/settings.py",
+                    ))
+                    return
+
+                # Testa acesso real ao banco Blue antes de iniciar os bots
+                df_test = db.query("SELECT TOP 1 NrDoc FROM Blue.dbo.vmVndDoc")
+                if df_test.empty and db.last_error:
+                    msg = f"● Conectado | Blue inacessível: {db.last_error[:60]}"
+                    self.after(0, lambda m=msg: self._lbl_status.configure(
+                        text=m, text_color=C["warning"]))
+                    self.after(0, lambda: messagebox.showwarning(
+                        "Aviso de Acesso",
+                        f"Conexão estabelecida, mas a query de teste falhou:\n\n{db.last_error}\n\n"
+                        "Verifique se o DSN aponta para o banco correto e se o usuário tem permissão.",
+                    ))
+                else:
+                    self.after(0, lambda: self._lbl_status.configure(
+                        text="● Conectado ao Blue", text_color=C["success"]))
+
+                # self._register_callbacks() — moved to main thread before load_from_cache()
+                self.bot_manager.start_all()
+
+            threading.Thread(target=task, daemon=True).start()
 
     def _register_callbacks(self):
         mapa = {
