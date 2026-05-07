@@ -919,8 +919,7 @@ class BotManager:
                     try:
                         cb(bot.name_label, bot.resultado)
                     except Exception as e:
-                        import logging
-                        logging.warning("Callback error [%s]: %s", bot.name_label, e)
+                        logger.warning("Callback error [%s]: %s", bot.name_label, e)
 
     def start_all(self):
         for bot in self.bots.values():

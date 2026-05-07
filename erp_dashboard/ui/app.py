@@ -653,6 +653,9 @@ class TelaVendas(ctk.CTkFrame):
             self.tab_vend.populate(self._ultimo_vend_dados, meta_tot, self._metas_ind)
 
     def _carregar_planos(self):
+        from config.settings import IS_HUB, HUB_URL
+        if HUB_URL and not IS_HUB:
+            return  # client mode — no direct DB access
         import time as _t
         df = None
         for _ in range(15):
