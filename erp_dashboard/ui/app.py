@@ -773,7 +773,7 @@ class TelaEstoque(ctk.CTkFrame):
 
         # Aba 3 — Orç × Estoque
         t3 = self._tabs.add("Orc × Estoque")
-        self.g_orc_estq = Grafico(t3, "Qtd Orçada (mês atual) vs Estoque Disponível — Top 15")
+        self.g_orc_estq = Grafico(t3, "Qtd Orçada (últimos 30 dias) vs Estoque Disponível — Top 15")
         self.g_orc_estq.pack(fill="both", expand=True)
 
         # Aba 4 — Venda × Compra
@@ -783,13 +783,12 @@ class TelaEstoque(ctk.CTkFrame):
 
         # Aba 5 — Média Semanal
         t5 = self._tabs.add("Média Semanal")
-        _secao(t5, "Média de Venda Semanal por Item — últimos 90 dias")
         self.tab_media = Tabela(
             t5,
             ["CodItem", "DescrItem", "DescrMarca", "media_semanal", "QtdEstqDisp", "semanas_cobertura"],
-            height=300,
+            height=360,
         )
-        self.tab_media.pack(fill="both", expand=True)
+        self.tab_media.pack(fill="both", expand=True, padx=4, pady=4)
 
         # Aba 6 — Sugestão de Transferência
         t6 = self._tabs.add("Sugestão Transf.")
@@ -1288,6 +1287,8 @@ class ERPDashboard(ctk.CTk):
 
     # ── Conexão ─────────────────────────────────────────────────────
     def _connect_and_start(self):
+        # Show stale data instantly while fresh data loads
+        self.bot_manager.load_from_cache()
         def task():
             ok = db.connect()
             if not ok:

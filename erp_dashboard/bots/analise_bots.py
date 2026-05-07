@@ -888,6 +888,14 @@ class BotManager:
             "crm":        BotCRM(),
         }
 
+    def load_from_cache(self):
+        """Fire registered callbacks with last-known cache data for instant startup."""
+        for name, bot in self.bots.items():
+            data = _cache.load(name)
+            if data:
+                bot.resultado = data
+                bot._notify()
+
     def start_all(self):
         for bot in self.bots.values():
             bot.start()
