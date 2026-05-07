@@ -62,7 +62,8 @@ class BaseBot(threading.Thread):
             except Exception as e:
                 logger.warning("Callback error [%s]: %s", self.name_label, e)
         try:
-            _cache.save(self.name_label, self.resultado)
+            if self.resultado:  # only persist if there's actual data
+                _cache.save(self.name_label, self.resultado)
         except Exception as e:
             logger.warning("cache.save error for %s: %s", self.name_label, e)
 
