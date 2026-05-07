@@ -1287,8 +1287,8 @@ class ERPDashboard(ctk.CTk):
 
     # ── Conexão ─────────────────────────────────────────────────────
     def _connect_and_start(self):
-        # Show stale data instantly while fresh data loads
-        self.bot_manager.load_from_cache()
+        self._register_callbacks()          # register UI callbacks on main thread
+        self.bot_manager.load_from_cache()  # now callbacks exist, instant display works
         def task():
             ok = db.connect()
             if not ok:
@@ -1316,7 +1316,7 @@ class ERPDashboard(ctk.CTk):
                 self.after(0, lambda: self._lbl_status.configure(
                     text="● Conectado ao Blue", text_color=C["success"]))
 
-            self._register_callbacks()
+            # self._register_callbacks() — moved to main thread before load_from_cache()
             self.bot_manager.start_all()
 
         threading.Thread(target=task, daemon=True).start()
