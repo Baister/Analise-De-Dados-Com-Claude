@@ -328,12 +328,12 @@ class BotEstoque(BaseBot):
         if self._loaded:
             return
         for tag, view in self._VIEWS.items():
-            df = db.query(f"SELECT TOP 0 * FROM {view}")
+            df = db.query(f"SELECT TOP 0 * FROM {view} WITH (NOLOCK)")
             if len(df.columns) > 0:
                 self._s[tag] = list(df.columns)
             else:
                 # TOP 0 pode falhar em views com erros de compilação — tenta TOP 1 como fallback
-                df1 = db.query(f"SELECT TOP 1 * FROM {view}")
+                df1 = db.query(f"SELECT TOP 1 * FROM {view} WITH (NOLOCK)")
                 self._s[tag] = list(df1.columns) if len(df1.columns) > 0 else []
             logger.info("[Estq] %-4s %-32s → %s",
                         tag, view.split(".")[-1],
@@ -354,6 +354,128 @@ class BotEstoque(BaseBot):
             if self._s.get(t):
                 return self._VIEWS[t], t
         return self._VIEWS[tags[0]], tags[0]
+
+    def analisar_rapido(self) -> dict:
+        """Apenas queries rápidas: KPIs + críticos + marcas. run() chama isso antes do analisar() completo."""
+        self._load_schemas()
+        ev, et = self._best("item", "vnd")
+
+        col_cod  = self._c(et, "CodItem",       "Codigo",         "CodigoItem",      "CodProduto")
+        col_dsc  = self._c(et, "DescrItem",     "Descricao",      "NomeItem",        "DescrProduto",
+                                "NomeProduto",   "DescrProd")
+        col_mrc  = self._c(et, "DescrMarca",    "Marca",          "DescrMarcaItem",  "NomeMarca",
+                                "DescrMarcaProd","MarcaItem")
+        col_qtd  = self._c(et, "QtdEstq",       "SaldoEstq",      "QtdSaldo",        "Qtd",
+                                "QtdEstoque",    "QtdTotEstq",     "QtdTotalEstq",    "SaldoQtd",
+                                "QtdSaldoEstq",  "QuantidadeEstq", "Quantidade")
+        col_disp = self._c(et, "QtdEstqDisp",   "SaldoDisp",      "QtdDisp",         "QtdSaldoDisp",
+                                "QtdEstqDisponiveis","QtdDisponivel","QtdEstoqueDisp", "QtdSaldoDisponivel",
+                                "SaldoDisponivel","QtdDispEstq")
+        col_vlr  = self._c(et, "VlrEstq",       "ValEstq",        "VlrTotEstq",      "SaldoVlr",
+                                "ValorEstoque",  "VlrTotalEstq",   "ValTotEstq",      "VlrTotal",
+                                "ValorTotal",    "TotVlrEstq",     "VlrEstoque",      "VlrSaldoEstq",
+                                "ValSaldoEstq",  "VlrTotItem",     "ValTotItem")
+        col_cst  = self._c(et, "CustoRepProd",  "CustoRep",       "ValCustoRep",     "CustoReposicao",
+                                "CustoRepItem",  "VlrCustoRep")
+        col_forn = self._c(et, "FornecUltCmp",  "FornecUltima",   "CodFornecUlt",    "Fornecedor",
+                                "NomeFornec",    "FornecedorUlt")
+        col_pend = self._c(et, "QtdPendPedCmp", "PendPed",        "QtdPedCmp",       "QtdPendCmp",
+                                "QtdPendentePed","QtdPendCompra")
+        col_dtv  = (self._c(et, "DtUltVnd",     "DtUltimaVenda",  "DtVnd",           "UltDtVnd",
+                                "DtUltVenda",    "DataUltVnd",     "DataUltimaVenda", "DtUltimaVnd")
+                    or self._c(self._best("vnd", "item")[1],
+                                "DtUltVnd",     "DtUltimaVenda",  "DtVnd",           "UltDtVnd",
+                                "DtUltVenda",    "DataUltVnd",     "DataUltimaVenda", "DtUltimaVnd"))
+
+        def _sum(col, alias):
+            return f"SUM(ISNULL({col},0)) AS {alias}" if col else f"0 AS {alias}"
+
+        wh_q    = f"WHERE ISNULL({col_qtd},0)>0" if col_qtd else ""
+        zero_ex = (f"SUM(CASE WHEN ISNULL({col_disp},0)<=0 THEN 1 ELSE 0 END) AS itens_zerados"
+                   if col_disp else "0 AS itens_zerados")
+        giro_ex = (f"SUM(CASE WHEN ISNULL(DATEDIFF(day,{col_dtv},GETDATE()),9999)"
+                   f">{DIAS_CRITICO} THEN 1 ELSE 0 END) AS itens_sem_giro"
+                   if col_dtv else "0 AS itens_sem_giro")
+
+        df_resumo = db.query(f"""
+            SELECT COUNT(*) AS total_itens,
+                   {_sum(col_vlr, 'valor_total_estoque')},
+                   {_sum(col_qtd, 'qtd_total')},
+                   {_sum(col_disp,'qtd_disponivel')},
+                   {zero_ex}, {giro_ex}
+            FROM {ev} WITH (NOLOCK) {wh_q}
+        """)
+
+        _cp = list(filter(None, [
+            f"e.{col_cod}  AS CodItem"       if col_cod  else None,
+            f"e.{col_dsc}  AS DescrItem"     if col_dsc  else None,
+            f"e.{col_mrc}  AS DescrMarca"    if col_mrc  else None,
+            f"e.{col_qtd}  AS QtdEstq"       if col_qtd  else None,
+            f"e.{col_disp} AS QtdEstqDisp"   if col_disp else None,
+            (f"CASE WHEN ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999)>120 THEN 120"
+             f" ELSE ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),0) END AS DiasSemVnd"
+             if col_dtv else None),
+            f"e.{col_dtv}  AS DtUltVnd"      if col_dtv  else None,
+            f"e.{col_cst}  AS CustoRepProd"  if col_cst  else None,
+            f"e.{col_vlr}  AS VlrEstq"       if col_vlr  else None,
+            f"e.{col_pend} AS QtdPendPedCmp" if col_pend else None,
+            f"e.{col_forn} AS FornecUltCmp"  if col_forn else None,
+        ]))
+        _wd = (f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999)>{DIAS_CRITICO}"
+               if col_dtv else "")
+        _wz = f"e.{col_disp}<=0" if col_disp else ""
+        _od = f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999) DESC," if col_dtv else ""
+        _ov = f"e.{col_vlr} DESC" if col_vlr else "1"
+        _where_crit = " OR ".join(filter(None, [_wd, _wz])) or "1=1"
+        df_criticos = db.query(f"""
+            SELECT TOP {MAX} {", ".join(_cp) if _cp else "e.*"}
+            FROM {ev} e WITH (NOLOCK) WHERE {_where_crit}
+            ORDER BY {_od} {_ov}
+        """)
+
+        df_marca = db.query(f"""
+            SELECT TOP 30 e.{col_mrc} AS DescrMarca,
+                COUNT(*) AS qtd_itens,
+                {_sum(col_vlr, 'valor_estoque')},
+                {_sum(col_qtd, 'quantidade_total')}
+            FROM {ev} e WITH (NOLOCK) GROUP BY e.{col_mrc} ORDER BY valor_estoque DESC
+        """) if col_mrc else pd.DataFrame()
+
+        def _recs(df):
+            return df.to_dict("records") if not df.empty else []
+
+        return {
+            "total_itens":         _safe_int(df_resumo,  "total_itens"),
+            "valor_total_estoque": _safe_float(df_resumo, "valor_total_estoque"),
+            "qtd_disponivel":      _safe_int(df_resumo,  "qtd_disponivel"),
+            "itens_zerados":       _safe_int(df_resumo,  "itens_zerados"),
+            "itens_sem_giro":      _safe_int(df_resumo,  "itens_sem_giro"),
+            "criticos":            _recs(df_criticos),
+            "por_marca":           _recs(df_marca),
+        }
+
+    def run(self):
+        """Override: notifica após tier-1 (rápido) e novamente após tier-2 (completo)."""
+        logger.info("Bot [%s] iniciado (tier-split). Intervalo: %ds", self.name_label, self.interval)
+        while not self._stop.is_set():
+            self.status = "executando"
+            try:
+                r_fast = self.analisar_rapido()
+                self.resultado = r_fast
+                self.status = "ok"
+                self.erro_msg = ""
+                self._notify()
+                self.resultado = self.analisar()
+                self._notify()
+            except Exception as e:
+                logger.error("Bot [%s] erro: %s", self.name_label, e)
+                self.status = "erro"
+                self.erro_msg = str(e)
+                self._notify()
+            for _ in range(max(1, self.interval // 5)):
+                if self._stop.is_set():
+                    break
+                time.sleep(5)
 
     def analisar(self) -> dict:
         self._load_schemas()
@@ -416,7 +538,7 @@ class BotEstoque(BaseBot):
                    {_sum(col_qtd, 'qtd_total')},
                    {_sum(col_disp,'qtd_disponivel')},
                    {zero_ex}, {giro_ex}
-            FROM {ev} {wh_q}
+            FROM {ev} WITH (NOLOCK) {wh_q}
         """)
 
         _cp = list(filter(None, [
@@ -442,7 +564,7 @@ class BotEstoque(BaseBot):
         _where_crit = " OR ".join(filter(None, [_wd, _wz])) or "1=1"
         df_criticos = db.query(f"""
             SELECT TOP {MAX} {", ".join(_cp) if _cp else "e.*"}
-            FROM {ev} e WHERE {_where_crit}
+            FROM {ev} e WITH (NOLOCK) WHERE {_where_crit}
             ORDER BY {_od} {_ov}
         """)
 
@@ -451,7 +573,7 @@ class BotEstoque(BaseBot):
                 COUNT(*) AS qtd_itens,
                 {_sum(col_vlr, 'valor_estoque')},
                 {_sum(col_qtd, 'quantidade_total')}
-            FROM {ev} e GROUP BY e.{col_mrc} ORDER BY valor_estoque DESC
+            FROM {ev} e WITH (NOLOCK) GROUP BY e.{col_mrc} ORDER BY valor_estoque DESC
         """) if col_mrc else pd.DataFrame()
 
         _wm = f"m.{col_mdt}>=DATEADD(day,-30,GETDATE())" if col_mdt else "1=1"
@@ -465,7 +587,7 @@ class BotEstoque(BaseBot):
             _grp = f"m.{col_mcod}" + (f", m.{col_mdsc}" if col_mdsc else "")
             df_mov = db.query(f"""
                 SELECT TOP 2000 {", ".join(_mp)}
-                FROM Blue.dbo.vmItemMovEstq m WHERE {_wm}
+                FROM Blue.dbo.vmItemMovEstq m WITH (NOLOCK) WHERE {_wm}
                 GROUP BY {_grp} ORDER BY saidas DESC
             """)
 
@@ -485,13 +607,13 @@ class BotEstoque(BaseBot):
             _where_ve = f"WHERE ISNULL(e.{col_disp},0)>=0" if col_disp else ""
             df_venda_estq = db.query(f"""
                 SELECT TOP 30 {", ".join(_vep)}
-                FROM {ev} e
+                FROM {ev} e WITH (NOLOCK)
                 LEFT JOIN (
                     SELECT i.CodItem,
                            SUM(i.QtdItem)         AS qtd_vendida_90d,
                            SUM(i.PrecoVndTotItem) AS val_vendido_90d
-                    FROM Blue.dbo.vmVndItemDoc i
-                    INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
+                    FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+                    INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
                     WHERE d.Cancelado='' AND i.Fat=1
                       AND i.DtVnd>=DATEADD(day,-90,GETDATE())
                     GROUP BY i.CodItem
@@ -513,13 +635,13 @@ class BotEstoque(BaseBot):
             ]
             df_orc_estq = db.query(f"""
                 SELECT TOP 30 {", ".join(_oep)}
-                FROM {ev} e
+                FROM {ev} e WITH (NOLOCK)
                 LEFT JOIN (
                     SELECT i.CodItem,
                            SUM(i.QtdItem)         AS qtd_orcada,
                            SUM(i.PrecoVndTotItem) AS val_orcado
-                    FROM Blue.dbo.vmVndItemDoc i
-                    INNER JOIN Blue.dbo.TbOrcPedVnd p ON i.NrDoc=p.NrOrcPedVnd
+                    FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+                    INNER JOIN Blue.dbo.TbOrcPedVnd p WITH (NOLOCK) ON i.NrDoc=p.NrOrcPedVnd
                     WHERE p.OrcPedVnd=1
                       AND i.DtVnd>=DATEADD(day,-30,GETDATE())
                     GROUP BY i.CodItem
@@ -539,7 +661,7 @@ class BotEstoque(BaseBot):
                     if col_msai and col_ment else "1=1")
             df_venda_compra = db.query(f"""
                 SELECT TOP 30 {", ".join(_vcp)}
-                FROM Blue.dbo.vmItemMovEstq m
+                FROM Blue.dbo.vmItemMovEstq m WITH (NOLOCK)
                 WHERE {_wm} GROUP BY {_grpvc}
                 HAVING {_hvc} ORDER BY saidas DESC
             """)
@@ -560,19 +682,19 @@ class BotEstoque(BaseBot):
             # JOIN com estoque só quando há colunas úteis a buscar — evita fan-out quando
             # ev = vmAnaliseEstqVnd (N linhas por item → distorce SUM(i.QtdItem))
             _need_join_e = any([col_dsc, col_mrc, col_qtd, col_disp])
-            _join_e_ms   = f"LEFT JOIN {ev} e ON i.CodItem=e.{col_cod}" if _need_join_e else ""
+            _join_e_ms   = f"LEFT JOIN {ev} e WITH (NOLOCK) ON i.CodItem=e.{col_cod}" if _need_join_e else ""
             df_media_semanal = db.query(f"""
                 SELECT TOP {MAX} {", ".join(_msp)}
-                FROM Blue.dbo.vmVndItemDoc i
-                INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
+                FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+                INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
                 {_join_e_ms}
                 WHERE d.Cancelado='' AND i.Fat=1
                   AND i.DtVnd>=DATEADD(day,-90,GETDATE())
                 GROUP BY i.CodItem ORDER BY media_semanal DESC
             """)
 
-        df_sug = db.query(f"SELECT TOP {MAX} * FROM Blue.dbo.vmSugestaoTransfEstq")
-        df_os  = db.query("SELECT TOP 200 * FROM Blue.dbo.vwEstqTempOs")
+        df_sug = db.query(f"SELECT TOP {MAX} * FROM Blue.dbo.vmSugestaoTransfEstq WITH (NOLOCK)")
+        df_os  = db.query("SELECT TOP 200 * FROM Blue.dbo.vwEstqTempOs WITH (NOLOCK)")
 
         def _recs(df):
             return df.to_dict("records") if not df.empty else []
@@ -723,7 +845,7 @@ class BotCRM(BaseBot):
                                                              AS taxa_conversao_pct,
                 SUM(CASE WHEN OrcPedVnd = 1 THEN ValTotalOrcPedVnd ELSE 0 END) AS valor_orcado,
                 SUM(CASE WHEN OrcPedVnd = 2 THEN ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido
-            FROM Blue.dbo.TbOrcPedVnd
+            FROM Blue.dbo.TbOrcPedVnd WITH (NOLOCK)
             WHERE DtOrcPedVnd >= {_MES_INI}
               AND DtOrcPedVnd <  {_MES_FIM}
         """)
@@ -737,9 +859,9 @@ class BotCRM(BaseBot):
                 COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END)                              AS convertidos,
                 SUM(CASE WHEN o.OrcPedVnd = 1 THEN i.PrecoVndTotItem ELSE 0 END)         AS valor_orcado,
                 SUM(CASE WHEN o.OrcPedVnd = 2 THEN i.PrecoVndTotItem ELSE 0 END)         AS valor_convertido
-            FROM Blue.dbo.TbOrcPedVnd o
-            INNER JOIN Blue.dbo.vmVndDoc v     ON o.NrOrcPedVnd = v.NrDoc
-            INNER JOIN Blue.dbo.vmVndItemDoc i ON o.NrOrcPedVnd = i.NrDoc
+            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vmVndDoc v     WITH (NOLOCK) ON o.NrOrcPedVnd = v.NrDoc
+            INNER JOIN Blue.dbo.vmVndItemDoc i WITH (NOLOCK) ON o.NrOrcPedVnd = i.NrDoc
             WHERE o.DtOrcPedVnd >= {_MES_INI}
               AND o.DtOrcPedVnd <  {_MES_FIM}
             GROUP BY v.Vendedor, i.DescrMarca
@@ -753,7 +875,7 @@ class BotCRM(BaseBot):
                     AS tipo,
                 COUNT(*)                   AS qtd_documentos,
                 SUM(ValTotalOrcPedVnd)     AS valor_total
-            FROM Blue.dbo.TbOrcPedVnd
+            FROM Blue.dbo.TbOrcPedVnd WITH (NOLOCK)
             WHERE DtOrcPedVnd >= {_MES_INI}
               AND DtOrcPedVnd <  {_MES_FIM}
             GROUP BY OrcPedVnd
@@ -766,7 +888,7 @@ class BotCRM(BaseBot):
                 Vendedor,
                 ValMeta,
                 ValRealizado
-            FROM Blue.dbo.vmMetaRealizadoVnd
+            FROM Blue.dbo.vmMetaRealizadoVnd WITH (NOLOCK)
         """)
         if not df_meta_vend.empty and "ValMeta" in df_meta_vend.columns:
             def _cat(row):
@@ -796,7 +918,7 @@ class BotCRM(BaseBot):
                 COUNT(DISTINCT v.NrDoc)                AS total_pedidos,
                 SUM(v.ValVndTotal)                     AS faturamento_historico,
                 AVG(v.ValVndTotal)                     AS ticket_medio
-            FROM Blue.dbo.vmVndDoc v
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
             GROUP BY v.CodCli
             HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) >= {DIAS_LISTA_INAT}
             ORDER BY dias_sem_compra DESC
@@ -818,8 +940,8 @@ class BotCRM(BaseBot):
                     v.CodCli,
                     DATEDIFF(day, MAX(v.DtVnd), GETDATE()) AS dias,
                     SUM(v.ValVndTotal)                     AS fat
-                FROM Blue.dbo.vmVndDoc v
-                INNER JOIN Blue.dbo.vwVndDoc d ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+                FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
                 WHERE d.Cancelado = '' AND d.Fat = 1
                 GROUP BY v.CodCli
                 HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) >= {DIAS_RISCO}
@@ -845,8 +967,8 @@ class BotCRM(BaseBot):
                     v.CodCli,
                     MIN(v.DtVnd) AS primeira_compra,
                     SUM(CASE WHEN v.DtVnd >= DATEADD(day,-30,GETDATE()) THEN v.ValVndTotal ELSE 0 END) AS fat_mes
-                FROM Blue.dbo.vmVndDoc v
-                INNER JOIN Blue.dbo.vwVndDoc d ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+                FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
                 WHERE d.Cancelado = '' AND d.Fat = 1
                 GROUP BY v.CodCli
                 HAVING SUM(CASE WHEN v.DtVnd >= DATEADD(day,-30,GETDATE()) THEN 1 ELSE 0 END) > 0
