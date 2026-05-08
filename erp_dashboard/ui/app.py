@@ -735,6 +735,7 @@ class TelaEstoque(ctk.CTkFrame):
     def __init__(self, master):
         super().__init__(master, fg_color="transparent")
         self._criticos_dados: list = []
+        self._ultimo_dados: dict = {}
         self._build()
 
     def _build(self):
@@ -859,12 +860,15 @@ class TelaEstoque(ctk.CTkFrame):
         self.tab_crit.populate(dados[:100])
 
     def refresh(self, dados: dict):
+        self._ultimo_dados = dados
+
+        # KPIs — imediato
         self.k_itens.update(str(dados.get("total_itens", 0)))
         self.k_valor.update(_brl(dados.get("valor_total_estoque", 0)))
         self.k_zero.update(str(dados.get("itens_zerados", 0)))
         self.k_giro.update(str(dados.get("itens_sem_giro", 0)))
 
-        # Aba 1 — Visão Geral
+        # Aba 1 — Visão Geral (marcas + movimentação + críticos) — imediato
         marcas = dados.get("por_marca", [])
         if marcas:
             lbs = [str(r.get("DescrMarca", "?"))[:14] for r in marcas[:10]]
@@ -877,6 +881,14 @@ class TelaEstoque(ctk.CTkFrame):
             vs  = [float(r.get("saidas", 0) or 0) for r in mov[:10]]
             self.g_mov.barras(lbs, vs, cor=C["success"])
 
+        self._criticos_dados = dados.get("criticos", [])
+        self._aplicar_filtro()
+
+        # Abas 2–7 — diferidas 10ms para não travar o frame atual
+        self.after(10, lambda d=dados: self._refresh_secondary(d))
+
+    def _refresh_secondary(self, dados: dict):
+        """Renderiza abas 2–7 no próximo ciclo do event loop, evitando freeze."""
         # Aba 2 — Venda × Estoque
         ve = dados.get("venda_estoque", [])
         if ve:
@@ -909,10 +921,6 @@ class TelaEstoque(ctk.CTkFrame):
         # Aba 6 — Sugestão Transf. / Aba 7 — OS Pendentes
         self._render_dyn_tab(self._frm_sug, dados.get("sugestao_transferencia", []), "_tab_sug_inst")
         self._render_dyn_tab(self._frm_os,  dados.get("estq_os", []),               "_tab_os_inst")
-
-        # Itens críticos
-        self._criticos_dados = dados.get("criticos", [])
-        self._aplicar_filtro()
 
 
 # ──────────────────────────────────────────────────────────────────
