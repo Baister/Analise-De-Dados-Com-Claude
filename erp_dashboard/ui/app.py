@@ -83,13 +83,13 @@ class Grafico(ctk.CTkFrame):
         ctk.CTkLabel(self, text=titulo,
                      font=ctk.CTkFont(size=11, weight="bold"),
                      text_color=C["text"]).pack(anchor="w", padx=14, pady=(10, 0))
-        self._canvas = None
-        self._fig    = None
+        self._mpl_canvas = None
+        self._fig        = None
 
     def _clean(self):
-        if self._canvas:
-            self._canvas.get_tk_widget().destroy()
-            self._canvas = None
+        if self._mpl_canvas:
+            self._mpl_canvas.get_tk_widget().destroy()
+            self._mpl_canvas = None
         if self._fig:
             plt.close(self._fig)
             self._fig = None
@@ -103,7 +103,7 @@ class Grafico(ctk.CTkFrame):
         return default_w, default_h
 
     def _on_configure(self, event):
-        if not self._fig or not self._canvas or event.width < 20 or event.height < 20:
+        if not self._fig or not self._mpl_canvas or event.width < 20 or event.height < 20:
             return
         dpi = self._fig.get_dpi()
         self._fig.set_size_inches(event.width / dpi, event.height / dpi, forward=False)
@@ -111,13 +111,13 @@ class Grafico(ctk.CTkFrame):
             self._fig.tight_layout(pad=1.0)
         except Exception:
             pass
-        self._canvas.draw_idle()
+        self._mpl_canvas.draw_idle()
 
     def _attach_canvas(self, fig, canvas):
         self._fig = fig
-        self._canvas = canvas
-        self._canvas.draw_idle()
-        w = self._canvas.get_tk_widget()
+        self._mpl_canvas = canvas
+        self._mpl_canvas.draw_idle()
+        w = self._mpl_canvas.get_tk_widget()
         w.pack(fill="both", expand=True, padx=6, pady=6)
         w.bind("<Configure>", self._on_configure, add="+")
 
@@ -657,6 +657,7 @@ class TelaVendas(ctk.CTkFrame):
         if HUB_URL and not IS_HUB:
             return  # client mode — no direct DB access
         import time as _t
+        _t.sleep(0.5)  # ensure mainloop has started before calling self.after()
         df = None
         for _ in range(15):
             df = db.mapear_planos()
@@ -1184,7 +1185,7 @@ class ERPDashboard(ctk.CTk):
         self._tela_atual = ""
 
         self._build_layout()
-        self._connect_and_start()
+        self.after(150, self._connect_and_start)
 
     # ── Layout ──────────────────────────────────────────────────────
     def _build_layout(self):
@@ -1393,4 +1394,9 @@ class ERPDashboard(ctk.CTk):
     def on_close(self):
         self.bot_manager.stop_all()
         db.disconnect()
+        for after_id in self.tk.eval("after info").split():
+            try:
+                self.after_cancel(after_id)
+            except Exception:
+                pass
         self.destroy()
