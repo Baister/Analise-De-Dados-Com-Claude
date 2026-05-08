@@ -47,6 +47,7 @@ class BaseBot(threading.Thread):
         self._stop           = threading.Event()
         self.callbacks: list = []
         self.erro_msg: str   = ""
+        self._ultimo_update_dt: "datetime | None" = None
 
     def stop(self):
         self._stop.set()
@@ -55,7 +56,9 @@ class BaseBot(threading.Thread):
         self.callbacks.append(fn)
 
     def _notify(self):
-        self.ultimo_update = datetime.now().strftime("%H:%M:%S")
+        _now = datetime.now()
+        self._ultimo_update_dt = _now
+        self.ultimo_update = _now.strftime("%H:%M:%S")
         for cb in self.callbacks:
             try:
                 cb(self.name_label, self.resultado)
@@ -66,6 +69,14 @@ class BaseBot(threading.Thread):
                 _cache.save(self.name_label, self.resultado)
         except Exception as e:
             logger.warning("cache.save error for %s: %s", self.name_label, e)
+
+    def seconds_until_next(self) -> "int | None":
+        if self.status == "executando":
+            return 0
+        if self._ultimo_update_dt is None:
+            return None
+        elapsed = (datetime.now() - self._ultimo_update_dt).total_seconds()
+        return max(0, int(self.interval - elapsed))
 
     def run(self):
         logger.info("Bot [%s] iniciado. Intervalo: %ds", self.name_label, self.interval)

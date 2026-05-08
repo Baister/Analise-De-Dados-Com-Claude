@@ -456,10 +456,13 @@ class PlanoDropdown(ctk.CTkFrame):
 #  TELA DASHBOARD
 # ──────────────────────────────────────────────────────────────────
 class TelaDashboard(ctk.CTkFrame):
-    def __init__(self, master):
+    def __init__(self, master, bot_manager):
         super().__init__(master, fg_color="transparent")
+        self._bot_manager = bot_manager
+        self._bot_status_labels: dict[str, ctk.CTkLabel] = {}
         self._ultimo_fat: float = 0.0
         self._build()
+        self._tick_countdown()
 
     def _build(self):
         # KPIs
@@ -507,6 +510,50 @@ class TelaDashboard(ctk.CTkFrame):
         self.g_marcas.pack(side="left", fill="both", expand=True, padx=(0, 6))
         self.g_vend = Grafico(row2, "Top Vendedores do Mês")
         self.g_vend.pack(side="left", fill="both", expand=True)
+
+        self._build_status_bar()
+
+    def _build_status_bar(self):
+        bar = ctk.CTkFrame(self, fg_color=C["card"], corner_radius=8,
+                           border_width=1, border_color=C["card_border"])
+        bar.pack(fill="x", pady=(6, 0))
+
+        ctk.CTkLabel(bar, text="📡 Bots:", font=ctk.CTkFont(size=10, weight="bold"),
+                     text_color=C["subtext"]).pack(side="left", padx=(12, 6), pady=6)
+
+        _nomes = {
+            "dashboard":  "Dashboard",
+            "vendas":     "Vendas",
+            "estoque":    "Estoque",
+            "financeiro": "Financeiro",
+            "crm":        "CRM",
+        }
+        for key, nome in _nomes.items():
+            lbl = ctk.CTkLabel(bar, text=f"{nome}  —",
+                               font=ctk.CTkFont(size=10),
+                               text_color=C["subtext"])
+            lbl.pack(side="left", padx=14, pady=6)
+            self._bot_status_labels[key] = lbl
+
+    def _tick_countdown(self):
+        for key, lbl in self._bot_status_labels.items():
+            bot = self._bot_manager.bots.get(key)
+            if bot is None:
+                continue
+            secs = bot.seconds_until_next()
+            nome = key.capitalize()
+            if bot.status == "executando" or secs == 0:
+                text = f"{nome}  ⟳ atualizando"
+                cor  = C["warning"]
+            elif secs is None:
+                text = f"{nome}  aguardando"
+                cor  = C["subtext"]
+            else:
+                m, s = divmod(secs, 60)
+                text = f"{nome}  ✓ {m}:{s:02d}"
+                cor  = C["success"] if bot.status == "ok" else C["subtext"]
+            lbl.configure(text=text, text_color=cor)
+        self.after(1000, self._tick_countdown)
 
     def _aplicar_meta(self):
         raw = self._meta_entry.get().strip().replace(".", "").replace(",", ".")
@@ -1271,7 +1318,7 @@ class ERPDashboard(ctk.CTk):
 
         # Cria telas (não visíveis ainda)
         self._telas = {
-            "Dashboard":  TelaDashboard(self._frame_telas),
+            "Dashboard":  TelaDashboard(self._frame_telas, self.bot_manager),
             "Vendas":     TelaVendas(self._frame_telas),
             "Estoque":    TelaEstoque(self._frame_telas),
             "Financeiro": TelaFinanceiro(self._frame_telas),
