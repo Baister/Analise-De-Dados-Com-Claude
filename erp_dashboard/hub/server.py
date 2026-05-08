@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 
-from config.settings import DASHBOARD_PASSWORD
+from config.settings import DASHBOARD_PASSWORD, ALERTAS
 from core.cache import cache as _cache
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,8 @@ async def verify_token_or_query(
     t = (creds.credentials if creds else None) or token
     exp = _tokens.get(t) if t else None
     if not t or exp is None or time.time() > exp:
-        _tokens.pop(t, None) if t else None
+        if t:
+            _tokens.pop(t, None)
         raise HTTPException(status_code=401, detail="Token inválido ou expirado")
     return t
 
@@ -107,7 +108,6 @@ def root():
 
 @app.get("/config")
 def config_route(_: str = Depends(verify_token)):
-    from config.settings import ALERTAS
     return {"meta_faturamento_mensal": ALERTAS.get("meta_faturamento_mensal", 400000)}
 
 
@@ -173,12 +173,6 @@ def status_route(_: str = Depends(verify_token)):
     return {"bots": {name: info for name, info in st.items()}}
 
 
-def _safe(s: Optional[str], maxlen: int = 100) -> Optional[str]:
-    if not s:
-        return None
-    return _re.sub(r"[;'\"\\]", "", s)[:maxlen]
-
-
 # NOTE: /dados/cliente must be registered BEFORE /dados/{bot_name} to avoid
 # FastAPI matching "cliente" as the bot_name path parameter.
 @app.get("/dados/cliente")
@@ -191,15 +185,19 @@ def dados_cliente(
     produto: Optional[str] = Query(default=None),
     _: str = Depends(verify_token),
 ):
+    def _valid_date(s: str) -> bool:
+        return bool(s and _re.fullmatch(r'\d{4}-\d{2}-\d{2}', s))
+
     try:
         from core.database import db
-        conds = ["1=1"]
-        if de:       conds.append(f"d.DtVnd >= '{_safe(de)}'")
-        if ate:      conds.append(f"d.DtVnd <= '{_safe(ate)}'")
-        if vendedor: conds.append(f"d.NomeVend LIKE '%{_safe(vendedor)}%'")
-        if cliente:  conds.append(f"d.NomeCli  LIKE '%{_safe(cliente)}%'")
-        if marca:    conds.append(f"i.DescrMarca LIKE '%{_safe(marca)}%'")
-        if produto:  conds.append(f"i.DescrItem  LIKE '%{_safe(produto)}%'")
+        conds  = ["1=1"]
+        params = []
+        if de      and _valid_date(de):    conds.append("d.DtVnd >= ?"); params.append(de)
+        if ate     and _valid_date(ate):   conds.append("d.DtVnd <= ?"); params.append(ate)
+        if vendedor:  conds.append("d.NomeVend LIKE ?"); params.append(f"%{vendedor[:100]}%")
+        if cliente:   conds.append("d.NomeCli  LIKE ?"); params.append(f"%{cliente[:100]}%")
+        if marca:     conds.append("i.DescrMarca LIKE ?"); params.append(f"%{marca[:100]}%")
+        if produto:   conds.append("i.DescrItem  LIKE ?"); params.append(f"%{produto[:100]}%")
         where = " AND ".join(conds)
 
         df = db.query(f"""
@@ -216,7 +214,7 @@ def dados_cliente(
             WHERE {where}
             GROUP BY d.NomeCli, i.DescrItem, i.DescrMarca, d.NomeVend
             ORDER BY faturamento DESC
-        """)
+        """, params if params else None)
 
         if df is None or df.empty:
             return {"kpis": {}, "top_clientes": [], "por_marca": [], "detalhe": []}
@@ -235,10 +233,10 @@ def dados_cliente(
         n_clientes = int(df["cliente"].nunique())
         return {
             "kpis": {
-                "total_clientes":    n_clientes,
-                "faturamento":       total_fat,
+                "total_clientes":     n_clientes,
+                "faturamento":        total_fat,
                 "produtos_distintos": int(df["produto"].nunique()),
-                "ticket_medio":      round(total_fat / max(n_clientes, 1), 2),
+                "ticket_medio":       round(total_fat / max(n_clientes, 1), 2),
             },
             "top_clientes": top_clientes,
             "por_marca":    por_marca,

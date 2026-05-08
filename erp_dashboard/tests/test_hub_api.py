@@ -62,6 +62,16 @@ def test_stream_requires_auth(client):
     assert resp.status_code in (401, 403)
 
 
+def test_config_requires_auth(client):
+    resp = client.get("/config")
+    assert resp.status_code in (401, 403)
+
+
+def test_dados_cliente_requires_auth(client):
+    resp = client.get("/dados/cliente")
+    assert resp.status_code in (401, 403)
+
+
 # ── Endpoints com token válido ────────────────────────────────────────
 
 def test_status_with_token(client):
