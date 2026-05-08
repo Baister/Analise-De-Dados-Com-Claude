@@ -98,6 +98,30 @@ class DatabaseManager:
                 self._conn = None
                 return pd.DataFrame()
 
+    def new_conn_query(self, sql: str) -> pd.DataFrame:
+        """Execute query on a fresh independent connection — safe for parallel calls."""
+        try:
+            conn = pyodbc.connect(self._build_conn_str(), autocommit=True)
+            conn.timeout = 120
+            try:
+                cursor = conn.cursor()
+                cursor.execute(sql)
+                if cursor.description is None:
+                    return pd.DataFrame()
+                cols = [desc[0] for desc in cursor.description]
+                rows = cursor.fetchall()
+                df = pd.DataFrame([list(r) for r in rows], columns=cols)
+                max_rows = ALERTAS.get("query_max_rows", 5000)
+                if len(df) > max_rows:
+                    df = df.head(max_rows)
+                return df
+            finally:
+                conn.close()
+        except Exception as e:
+            self.last_error = str(e)
+            logger.error("new_conn_query error: %s\n→ SQL: %.400s", e, sql.strip())
+            return pd.DataFrame()
+
     def listar_bancos(self) -> list[str]:
         df = self.query("SELECT name FROM sys.databases ORDER BY name")
         return df["name"].tolist() if not df.empty else []

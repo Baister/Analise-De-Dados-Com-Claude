@@ -3,6 +3,7 @@
 # CodPlanoVnd = FORMA DE PAGAMENTO (não tipo de documento).
 # Separação Orçamento × Venda usa Blue.dbo.TbOrcPedVnd.OrcPedVnd (1=Orc, 2=Venda).
 
+import concurrent.futures
 import pandas as pd
 import threading
 import time
@@ -489,10 +490,12 @@ class BotEstoque(BaseBot):
                 time.sleep(5)
 
     def analisar(self) -> dict:
+        t0 = time.time()
         self._load_schemas()
         ev,  et  = self._best("item", "vnd")
         evv, evt = self._best("vnd",  "item")
 
+        # ── Detecção de colunas (sem DB) ───────────────────────────
         col_cod  = self._c(et,  "CodItem",       "Codigo",         "CodigoItem",      "CodProduto")
         col_dsc  = self._c(et,  "DescrItem",     "Descricao",      "NomeItem",        "DescrProduto",
                                 "NomeProduto",   "DescrProd")
@@ -533,6 +536,7 @@ class BotEstoque(BaseBot):
         col_mliq = self._c("mov", "QtdLiqVendas", "QtdLiq",     "Liquido",       "QtdLiquido",  "LiqVnd")
         col_mdt  = self._c("mov", "DtMovEstq",    "DtMov",      "Data",          "DtMovimento", "DtMov",       "DataMov")
 
+        # ── Construção das SQL strings (sem DB) ────────────────────
         def _sum(col, alias):
             return f"SUM(ISNULL({col},0)) AS {alias}" if col else f"0 AS {alias}"
 
@@ -542,15 +546,14 @@ class BotEstoque(BaseBot):
         giro_ex = (f"SUM(CASE WHEN ISNULL(DATEDIFF(day,{col_dtv},GETDATE()),9999)"
                    f">{DIAS_CRITICO} THEN 1 ELSE 0 END) AS itens_sem_giro"
                    if col_dtv else "0 AS itens_sem_giro")
-
-        df_resumo = db.query(f"""
+        sql_resumo = f"""
             SELECT COUNT(*) AS total_itens,
                    {_sum(col_vlr, 'valor_total_estoque')},
                    {_sum(col_qtd, 'qtd_total')},
                    {_sum(col_disp,'qtd_disponivel')},
                    {zero_ex}, {giro_ex}
             FROM {ev} WITH (NOLOCK) {wh_q}
-        """)
+        """
 
         _cp = list(filter(None, [
             f"e.{col_cod}  AS CodItem"       if col_cod  else None,
@@ -573,22 +576,22 @@ class BotEstoque(BaseBot):
         _od = f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999) DESC," if col_dtv else ""
         _ov = f"e.{col_vlr} DESC" if col_vlr else "1"
         _where_crit = " OR ".join(filter(None, [_wd, _wz])) or "1=1"
-        df_criticos = db.query(f"""
+        sql_criticos = f"""
             SELECT TOP {MAX} {", ".join(_cp) if _cp else "e.*"}
             FROM {ev} e WITH (NOLOCK) WHERE {_where_crit}
             ORDER BY {_od} {_ov}
-        """)
+        """
 
-        df_marca = db.query(f"""
+        sql_marca = (f"""
             SELECT TOP 30 e.{col_mrc} AS DescrMarca,
                 COUNT(*) AS qtd_itens,
                 {_sum(col_vlr, 'valor_estoque')},
                 {_sum(col_qtd, 'quantidade_total')}
             FROM {ev} e WITH (NOLOCK) GROUP BY e.{col_mrc} ORDER BY valor_estoque DESC
-        """) if col_mrc else pd.DataFrame()
+        """ if col_mrc else None)
 
         _wm = f"m.{col_mdt}>=DATEADD(day,-30,GETDATE())" if col_mdt else "1=1"
-        df_mov = pd.DataFrame()
+        sql_mov = None
         if smov and col_mcod:
             _mp = [f"m.{col_mcod} AS CodItem"]
             if col_mdsc: _mp.append(f"m.{col_mdsc} AS DescrItem")
@@ -596,13 +599,13 @@ class BotEstoque(BaseBot):
             _mp.append(f"SUM(m.{col_msai}) AS saidas"   if col_msai else "0 AS saidas")
             if col_mliq: _mp.append(f"SUM(m.{col_mliq}) AS vendas_liquidas")
             _grp = f"m.{col_mcod}" + (f", m.{col_mdsc}" if col_mdsc else "")
-            df_mov = db.query(f"""
+            sql_mov = f"""
                 SELECT TOP 2000 {", ".join(_mp)}
                 FROM Blue.dbo.vmItemMovEstq m WITH (NOLOCK) WHERE {_wm}
                 GROUP BY {_grp} ORDER BY saidas DESC
-            """)
+            """
 
-        df_venda_estq = pd.DataFrame()
+        sql_venda_estq = None
         if col_cod:
             _vep = [f"e.{col_cod} AS CodItem"]
             for _cx, _ax in [(col_dsc,"DescrItem"),(col_mrc,"DescrMarca"),
@@ -616,7 +619,7 @@ class BotEstoque(BaseBot):
                 "ISNULL(v.val_vendido_90d, 0) AS val_vendido_90d",
             ]
             _where_ve = f"WHERE ISNULL(e.{col_disp},0)>=0" if col_disp else ""
-            df_venda_estq = db.query(f"""
+            sql_venda_estq = f"""
                 SELECT TOP 30 {", ".join(_vep)}
                 FROM {ev} e WITH (NOLOCK)
                 LEFT JOIN (
@@ -631,9 +634,9 @@ class BotEstoque(BaseBot):
                 ) v ON e.{col_cod}=v.CodItem
                 {_where_ve}
                 ORDER BY ISNULL(v.qtd_vendida_90d,0) DESC
-            """)
+            """
 
-        df_orc_estq = pd.DataFrame()
+        sql_orc_estq = None
         if col_cod:
             _oep = [f"e.{col_cod} AS CodItem"]
             if col_dsc: _oep.append(f"e.{col_dsc} AS DescrItem")
@@ -644,7 +647,7 @@ class BotEstoque(BaseBot):
                 "ISNULL(o.qtd_orcada,0) AS qtd_orcada",
                 "ISNULL(o.val_orcado, 0) AS val_orcado",
             ]
-            df_orc_estq = db.query(f"""
+            sql_orc_estq = f"""
                 SELECT TOP 30 {", ".join(_oep)}
                 FROM {ev} e WITH (NOLOCK)
                 LEFT JOIN (
@@ -659,9 +662,9 @@ class BotEstoque(BaseBot):
                 ) o ON e.{col_cod}=o.CodItem
                 WHERE ISNULL(o.qtd_orcada,0)>0
                 ORDER BY qtd_orcada DESC
-            """)
+            """
 
-        df_venda_compra = pd.DataFrame()
+        sql_venda_compra = None
         if smov and col_mcod:
             _vcp = [f"m.{col_mcod} AS CodItem"]
             if col_mdsc: _vcp.append(f"m.{col_mdsc} AS DescrItem")
@@ -670,14 +673,14 @@ class BotEstoque(BaseBot):
             _grpvc = f"m.{col_mcod}" + (f", m.{col_mdsc}" if col_mdsc else "")
             _hvc = (f"SUM(m.{col_msai})>0 OR SUM(m.{col_ment})>0"
                     if col_msai and col_ment else "1=1")
-            df_venda_compra = db.query(f"""
+            sql_venda_compra = f"""
                 SELECT TOP 30 {", ".join(_vcp)}
                 FROM Blue.dbo.vmItemMovEstq m WITH (NOLOCK)
                 WHERE {_wm} GROUP BY {_grpvc}
                 HAVING {_hvc} ORDER BY saidas DESC
-            """)
+            """
 
-        df_media_semanal = pd.DataFrame()
+        sql_media_semanal = None
         if col_cod:
             _msp = ["i.CodItem"]
             if col_dsc: _msp.append(f"MAX(e.{col_dsc}) AS DescrItem")
@@ -694,7 +697,7 @@ class BotEstoque(BaseBot):
             # ev = vmAnaliseEstqVnd (N linhas por item → distorce SUM(i.QtdItem))
             _need_join_e = any([col_dsc, col_mrc, col_qtd, col_disp])
             _join_e_ms   = f"LEFT JOIN {ev} e WITH (NOLOCK) ON i.CodItem=e.{col_cod}" if _need_join_e else ""
-            df_media_semanal = db.query(f"""
+            sql_media_semanal = f"""
                 SELECT TOP {MAX} {", ".join(_msp)}
                 FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
                 INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
@@ -702,10 +705,50 @@ class BotEstoque(BaseBot):
                 WHERE d.Cancelado='' AND i.Fat=1
                   AND i.DtVnd>=DATEADD(day,-90,GETDATE())
                 GROUP BY i.CodItem ORDER BY media_semanal DESC
-            """)
+            """
 
-        df_sug = db.query(f"SELECT TOP {MAX} * FROM Blue.dbo.vmSugestaoTransfEstq WITH (NOLOCK)")
-        df_os  = db.query("SELECT TOP 200 * FROM Blue.dbo.vwEstqTempOs WITH (NOLOCK)")
+        sql_sug = f"SELECT TOP {MAX} * FROM Blue.dbo.vmSugestaoTransfEstq WITH (NOLOCK)"
+        sql_os  = "SELECT TOP 200 * FROM Blue.dbo.vwEstqTempOs WITH (NOLOCK)"
+
+        # ── Execução paralela (4 workers, cada um com conexão própria) ─
+        _all_sql: dict[str, str] = {k: v for k, v in {
+            "resumo":         sql_resumo,
+            "criticos":       sql_criticos,
+            "marca":          sql_marca,
+            "mov":            sql_mov,
+            "venda_estq":     sql_venda_estq,
+            "orc_estq":       sql_orc_estq,
+            "venda_compra":   sql_venda_compra,
+            "media_semanal":  sql_media_semanal,
+            "sug":            sql_sug,
+            "os":             sql_os,
+        }.items() if v is not None}
+
+        _res: dict[str, pd.DataFrame] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(db.new_conn_query, sql): key
+                       for key, sql in _all_sql.items()}
+            for f in concurrent.futures.as_completed(futures):
+                key = futures[f]
+                try:
+                    _res[key] = f.result()
+                except Exception as e:
+                    logger.error("[Estq] Erro paralelo [%s]: %s", key, e)
+                    _res[key] = pd.DataFrame()
+
+        logger.info("[Estq] analisar() concluído em %.1fs (paralelo %d workers)",
+                    time.time() - t0, min(4, len(_all_sql)))
+
+        df_resumo        = _res.get("resumo",        pd.DataFrame())
+        df_criticos      = _res.get("criticos",      pd.DataFrame())
+        df_marca         = _res.get("marca",         pd.DataFrame())
+        df_mov           = _res.get("mov",           pd.DataFrame())
+        df_venda_estq    = _res.get("venda_estq",    pd.DataFrame())
+        df_orc_estq      = _res.get("orc_estq",      pd.DataFrame())
+        df_venda_compra  = _res.get("venda_compra",  pd.DataFrame())
+        df_media_semanal = _res.get("media_semanal", pd.DataFrame())
+        df_sug           = _res.get("sug",           pd.DataFrame())
+        df_os            = _res.get("os",            pd.DataFrame())
 
         def _recs(df):
             return df.to_dict("records") if not df.empty else []
