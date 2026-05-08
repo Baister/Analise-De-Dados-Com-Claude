@@ -398,7 +398,7 @@ class PlanoDropdown(ctk.CTkFrame):
         self._btn.update_idletasks()
         x = self._btn.winfo_rootx()
         y = self._btn.winfo_rooty() + self._btn.winfo_height() + 2
-        pop = ctk.CTkToplevel(self._btn)
+        pop = ctk.CTkToplevel(self.winfo_toplevel())
         pop.wm_overrideredirect(True)
         pop.configure(fg_color=C["card"])
         pop.geometry(f"280x300+{x}+{y}")
