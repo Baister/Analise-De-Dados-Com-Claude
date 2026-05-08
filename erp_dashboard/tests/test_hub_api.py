@@ -90,3 +90,38 @@ def test_root_returns_ok(client):
     resp = client.get("/")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+# ── Novos endpoints — Task 1 ──────────────────────────────────────────
+
+def test_stream_with_query_token(client):
+    resp = client.post("/auth", json={"password": SENHA_TESTE})
+    tok = resp.json()["access_token"]
+    # EventSource passa token como query param.
+    # Patchamos o generator para terminar após um ping, evitando hang do stream infinito.
+    async def _one_shot_gen(_q):
+        yield "event: ping\ndata: {}\n\n"
+
+    with patch("hub.server._sse_generator", _one_shot_gen):
+        resp2 = client.get(f"/stream?token={tok}")
+    assert resp2.status_code == 200
+
+def test_config_with_token(client):
+    tok = _token(client)
+    resp = client.get("/config", headers={"Authorization": f"Bearer {tok}"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "meta_faturamento_mensal" in body
+    assert isinstance(body["meta_faturamento_mensal"], (int, float))
+
+def test_dados_cliente_with_token(client):
+    tok = _token(client)
+    resp = client.get("/dados/cliente", headers={"Authorization": f"Bearer {tok}"})
+    # Aceita 200 (dados) ou 503 (sem DB em testes unitários)
+    assert resp.status_code in (200, 503)
+    if resp.status_code == 200:
+        body = resp.json()
+        assert "kpis" in body
+        assert "top_clientes" in body
+        assert "por_marca" in body
+        assert "detalhe" in body

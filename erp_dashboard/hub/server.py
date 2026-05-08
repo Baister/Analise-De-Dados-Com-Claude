@@ -3,16 +3,18 @@ import asyncio
 import json
 import logging
 import pathlib
+import re as _re
 import secrets
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import Optional
 
 from config.settings import DASHBOARD_PASSWORD
 from core.cache import cache as _cache
@@ -69,6 +71,20 @@ def verify_token(creds: HTTPAuthorizationCredentials = Depends(_bearer)) -> str:
     return token
 
 
+_bearer_optional = HTTPBearer(auto_error=False)
+
+async def verify_token_or_query(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_optional),
+    token: Optional[str] = Query(default=None),
+) -> str:
+    t = (creds.credentials if creds else None) or token
+    exp = _tokens.get(t) if t else None
+    if not t or exp is None or time.time() > exp:
+        _tokens.pop(t, None) if t else None
+        raise HTTPException(status_code=401, detail="Token inválido ou expirado")
+    return t
+
+
 class AuthRequest(BaseModel):
     password: str
 
@@ -89,6 +105,12 @@ def root():
     return {"status": "ok", "api": "ERP Dashboard v2.0", "docs": "/docs"}
 
 
+@app.get("/config")
+def config_route(_: str = Depends(verify_token)):
+    from config.settings import ALERTAS
+    return {"meta_faturamento_mensal": ALERTAS.get("meta_faturamento_mensal", 400000)}
+
+
 # ── SSE — broadcast chamado de threads dos bots ───────────────────────
 def _broadcast_update(bot_name: str, _resultado: dict):
     """Thread-safe: coloca evento nas filas asyncio dos clientes SSE conectados."""
@@ -104,6 +126,8 @@ def _broadcast_update(bot_name: str, _resultado: dict):
 
 async def _sse_generator(q: asyncio.Queue):
     try:
+        # Emit an immediate ping so clients (and tests) can confirm the connection
+        yield "event: ping\ndata: {}\n\n"
         while True:
             try:
                 event = await asyncio.wait_for(q.get(), timeout=30.0)
@@ -120,7 +144,7 @@ async def _sse_generator(q: asyncio.Queue):
 
 
 @app.get("/stream")
-async def stream(_: str = Depends(verify_token)):
+async def stream(_: str = Depends(verify_token_or_query)):
     q: asyncio.Queue = asyncio.Queue()
     _sse_queues.append(q)
     return StreamingResponse(
@@ -147,6 +171,82 @@ def status_route(_: str = Depends(verify_token)):
         }
     st = _cache.status()
     return {"bots": {name: info for name, info in st.items()}}
+
+
+def _safe(s: Optional[str], maxlen: int = 100) -> Optional[str]:
+    if not s:
+        return None
+    return _re.sub(r"[;'\"\\]", "", s)[:maxlen]
+
+
+# NOTE: /dados/cliente must be registered BEFORE /dados/{bot_name} to avoid
+# FastAPI matching "cliente" as the bot_name path parameter.
+@app.get("/dados/cliente")
+def dados_cliente(
+    de: Optional[str] = Query(default=None),
+    ate: Optional[str] = Query(default=None),
+    vendedor: Optional[str] = Query(default=None),
+    cliente: Optional[str] = Query(default=None),
+    marca: Optional[str] = Query(default=None),
+    produto: Optional[str] = Query(default=None),
+    _: str = Depends(verify_token),
+):
+    try:
+        from core.database import db
+        conds = ["1=1"]
+        if de:       conds.append(f"d.DtVnd >= '{_safe(de)}'")
+        if ate:      conds.append(f"d.DtVnd <= '{_safe(ate)}'")
+        if vendedor: conds.append(f"d.NomeVend LIKE '%{_safe(vendedor)}%'")
+        if cliente:  conds.append(f"d.NomeCli  LIKE '%{_safe(cliente)}%'")
+        if marca:    conds.append(f"i.DescrMarca LIKE '%{_safe(marca)}%'")
+        if produto:  conds.append(f"i.DescrItem  LIKE '%{_safe(produto)}%'")
+        where = " AND ".join(conds)
+
+        df = db.query(f"""
+            SELECT TOP 500
+                d.NomeCli      AS cliente,
+                i.DescrItem    AS produto,
+                i.DescrMarca   AS marca,
+                d.NomeVend     AS vendedor,
+                SUM(i.QtdFat)  AS quantidade,
+                SUM(i.TotalFat) AS faturamento
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vmVndDoc d WITH (NOLOCK)
+                ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+            WHERE {where}
+            GROUP BY d.NomeCli, i.DescrItem, i.DescrMarca, d.NomeVend
+            ORDER BY faturamento DESC
+        """)
+
+        if df is None or df.empty:
+            return {"kpis": {}, "top_clientes": [], "por_marca": [], "detalhe": []}
+
+        top_clientes = (
+            df.groupby("cliente")["faturamento"].sum()
+            .reset_index().sort_values("faturamento", ascending=False)
+            .head(10).to_dict("records")
+        )
+        por_marca = (
+            df.groupby("marca")["faturamento"].sum()
+            .reset_index().sort_values("faturamento", ascending=False)
+            .head(10).to_dict("records")
+        )
+        total_fat = float(df["faturamento"].sum())
+        n_clientes = int(df["cliente"].nunique())
+        return {
+            "kpis": {
+                "total_clientes":    n_clientes,
+                "faturamento":       total_fat,
+                "produtos_distintos": int(df["produto"].nunique()),
+                "ticket_medio":      round(total_fat / max(n_clientes, 1), 2),
+            },
+            "top_clientes": top_clientes,
+            "por_marca":    por_marca,
+            "detalhe":      df.to_dict("records"),
+        }
+    except Exception as e:
+        logger.error("dados_cliente erro: %s", e)
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @app.get("/dados/{bot_name}")
