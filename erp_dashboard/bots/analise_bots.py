@@ -466,29 +466,6 @@ class BotEstoque(BaseBot):
             "por_marca":           _recs(df_marca),
         }
 
-    def run(self):
-        """Override: notifica após tier-1 (rápido) e novamente após tier-2 (completo)."""
-        logger.info("Bot [%s] iniciado (tier-split). Intervalo: %ds", self.name_label, self.interval)
-        while not self._stop.is_set():
-            self.status = "executando"
-            try:
-                r_fast = self.analisar_rapido()
-                self.resultado = r_fast
-                self.status = "ok"
-                self.erro_msg = ""
-                self._notify()
-                self.resultado = self.analisar()
-                self._notify()
-            except Exception as e:
-                logger.error("Bot [%s] erro: %s", self.name_label, e)
-                self.status = "erro"
-                self.erro_msg = str(e)
-                self._notify()
-            for _ in range(max(1, self.interval // 5)):
-                if self._stop.is_set():
-                    break
-                time.sleep(5)
-
     def analisar(self) -> dict:
         t0 = time.time()
         self._load_schemas()
