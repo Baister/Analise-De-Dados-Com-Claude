@@ -25,3 +25,15 @@ export function getUniqueValues(rows, key) {
   const vals = [...new Set(rows.map(r => r[key]).filter(Boolean))].sort();
   return ['todos', ...vals];
 }
+
+export function agregaPorDia(rows, filterKey = null, filterValue = null) {
+  const src = filterKey && filterValue
+    ? rows.filter(r => r[filterKey] === filterValue)
+    : rows;
+  const map = {};
+  for (const r of src) {
+    if (!map[r.dia]) map[r.dia] = { dia: r.dia, faturamento: 0 };
+    map[r.dia].faturamento += r.faturamento ?? 0;
+  }
+  return Object.values(map).sort((a, b) => (a.dia < b.dia ? -1 : 1));
+}
