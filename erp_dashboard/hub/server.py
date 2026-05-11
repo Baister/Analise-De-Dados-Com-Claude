@@ -247,6 +247,161 @@ def dados_cliente(
         raise HTTPException(status_code=503, detail=str(e))
 
 
+# NOTE: /dados/cliente_comportamento must be registered BEFORE /dados/{bot_name}
+# to avoid FastAPI matching "cliente_comportamento" as the bot_name path parameter.
+@app.get("/dados/cliente_comportamento")
+def dados_cliente_comportamento(
+    cliente:  Optional[str] = Query(default=None),
+    de:       Optional[str] = Query(default=None),
+    ate:      Optional[str] = Query(default=None),
+    vendedor: Optional[str] = Query(default=None),
+    marca:    Optional[str] = Query(default=None),
+    _: str = Depends(verify_token),
+):
+    def _valid_date(s: str) -> bool:
+        return bool(s and _re.fullmatch(r'\d{4}-\d{2}-\d{2}', s))
+
+    try:
+        from core.database import db
+        conds  = ["d.Fat = 1", "d.Cancelado = ''"]
+        params: list = []
+
+        if de  and _valid_date(de):   conds.append("v.DtVnd >= ?"); params.append(de)
+        if ate and _valid_date(ate):  conds.append("v.DtVnd <= ?"); params.append(ate)
+        if not de and not ate:
+            conds.append("v.DtVnd >= DATEADD(month, -12, GETDATE())")
+
+        if vendedor: conds.append("v.Vendedor LIKE ?");   params.append(f"%{vendedor[:100]}%")
+        if marca:    conds.append("i.DescrMarca LIKE ?"); params.append(f"%{marca[:100]}%")
+        if cliente:  conds.append("v.NomeRazCli LIKE ?"); params.append(f"%{cliente[:100]}%")
+
+        where = " AND ".join(conds)
+
+        df_info = db.query(f"""
+            SELECT TOP 1 v.NomeRazCli AS nome, v.CodCli AS cod, v.Vendedor AS vendedor
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE {where}
+            ORDER BY v.DtVnd DESC
+        """, params if params else None)
+
+        df_kpi = db.query(f"""
+            SELECT
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS venda_bruta,
+                SUM(CASE WHEN v.CustoRepTotal < 0  THEN v.ValVndTotal ELSE 0 END) AS devolucao,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END)   AS qtd_vendas,
+                SUM(v.CustoRepTotal)                                               AS custo_total
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE {where}
+        """, params if params else None)
+
+        df_mensal = db.query(f"""
+            SELECT
+                FORMAT(v.DtVnd, 'yyyy-MM') AS mes,
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS venda_bruta,
+                SUM(CASE WHEN v.CustoRepTotal < 0  THEN v.ValVndTotal ELSE 0 END) AS devolucao
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE {where}
+            GROUP BY FORMAT(v.DtVnd, 'yyyy-MM')
+            ORDER BY mes
+        """, params if params else None)
+
+        i_params = list(params)
+        df_marcas = db.query(f"""
+            SELECT TOP 10 i.DescrMarca,
+                SUM(i.PrecoVndTotItem) AS faturamento,
+                SUM(i.QtdItem) AS quantidade
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+            INNER JOIN Blue.dbo.vmVndDoc v WITH (NOLOCK) ON i.NrDoc = v.NrDoc AND i.NSUDoc = v.NSUDoc
+            WHERE i.DescrMarca IS NOT NULL AND i.CustoRepTotItem >= 0 AND {where}
+            GROUP BY i.DescrMarca ORDER BY faturamento DESC
+        """, i_params if i_params else None)
+
+        df_prod = db.query(f"""
+            SELECT TOP 10 i.DescrItem,
+                SUM(i.PrecoVndTotItem) AS faturamento,
+                SUM(i.QtdItem) AS quantidade
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+            INNER JOIN Blue.dbo.vmVndDoc v WITH (NOLOCK) ON i.NrDoc = v.NrDoc AND i.NSUDoc = v.NSUDoc
+            WHERE i.DescrItem IS NOT NULL AND i.CustoRepTotItem >= 0 AND {where}
+            GROUP BY i.DescrItem ORDER BY faturamento DESC
+        """, i_params if i_params else None)
+
+        venda_bruta = float(df_kpi["venda_bruta"].iloc[0]) if not df_kpi.empty and df_kpi["venda_bruta"].iloc[0] is not None else 0.0
+        devolucao   = float(df_kpi["devolucao"].iloc[0])   if not df_kpi.empty and df_kpi["devolucao"].iloc[0] is not None else 0.0
+        venda_liq   = venda_bruta + devolucao
+        custo       = float(df_kpi["custo_total"].iloc[0]) if not df_kpi.empty and df_kpi["custo_total"].iloc[0] is not None else 0.0
+        qtd_vendas  = int(df_kpi["qtd_vendas"].iloc[0])    if not df_kpi.empty and df_kpi["qtd_vendas"].iloc[0] is not None else 0
+        margem_pct  = round((venda_liq - custo) / venda_liq * 100, 1) if venda_liq else 0.0
+        ticket      = round(venda_bruta / max(qtd_vendas, 1), 2)
+
+        info = {}
+        if not df_info.empty:
+            row = df_info.iloc[0]
+            info = {
+                "nome":     str(row.get("nome", "") or ""),
+                "cod":      str(row.get("cod", "") or ""),
+                "vendedor": str(row.get("vendedor", "") or ""),
+            }
+
+        return {
+            "cliente_info":    info,
+            "kpis": {
+                "venda_bruta":   venda_bruta,
+                "devolucao":     devolucao,
+                "venda_liquida": venda_liq,
+                "margem_pct":    margem_pct,
+                "ticket_medio":  ticket,
+            },
+            "evolucao_mensal": df_mensal.to_dict("records") if not df_mensal.empty else [],
+            "top_marcas":      df_marcas.to_dict("records") if not df_marcas.empty else [],
+            "top_produtos":    df_prod.to_dict("records")   if not df_prod.empty   else [],
+        }
+    except Exception as e:
+        logger.error("dados_cliente_comportamento erro: %s", e)
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+# NOTE: /dados/{bot_name}/filtered must be registered BEFORE /dados/{bot_name}
+# so FastAPI does not absorb "filtered" as a bot_name value.
+@app.get("/dados/{bot_name}/filtered")
+def dados_filtrado(
+    bot_name: str,
+    vendedor:        Optional[str] = Query(default=None),
+    marca:           Optional[str] = Query(default=None),
+    periodo:         Optional[str] = Query(default=None),
+    dt_de:           Optional[str] = Query(default=None),
+    dt_ate:          Optional[str] = Query(default=None),
+    dias_atraso_min: Optional[str] = Query(default=None),
+    _: str = Depends(verify_token),
+):
+    if _manager is None:
+        raise HTTPException(status_code=503, detail="Hub não iniciado — modo cliente")
+
+    bot = _manager.bots.get(bot_name)
+    if bot is None:
+        raise HTTPException(status_code=404, detail=f"Bot '{bot_name}' não encontrado")
+
+    filtros = {}
+    if vendedor:        filtros["vendedor"]        = vendedor
+    if marca:           filtros["marca"]           = marca
+    if periodo:         filtros["periodo"]         = periodo
+    if dt_de:           filtros["dt_de"]           = dt_de
+    if dt_ate:          filtros["dt_ate"]          = dt_ate
+    if dias_atraso_min: filtros["dias_atraso_min"] = dias_atraso_min
+
+    try:
+        resultado = bot.analisar_filtrado(filtros)
+        return JSONResponse(content=resultado)
+    except Exception as e:
+        logger.error("dados_filtrado [%s] erro: %s", bot_name, e)
+        raise HTTPException(status_code=503, detail=str(e))
+
+
 @app.get("/dados/{bot_name}")
 def dados(bot_name: str, _: str = Depends(verify_token)):
     data = _cache.load(bot_name)
