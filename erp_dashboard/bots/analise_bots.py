@@ -164,7 +164,7 @@ class BotDashboard(BaseBot):
             SELECT dia, faturamento FROM (
                 SELECT TOP 30
                     CONVERT(date, v.DtVnd) AS dia,
-                    SUM(v.ValVndTotal)      AS faturamento
+                    SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS faturamento
                 FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
                 INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
                 WHERE v.DtVnd >= DATEADD(day, -30, GETDATE())
