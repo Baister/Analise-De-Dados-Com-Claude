@@ -2,13 +2,12 @@ import { useEffect, useRef } from 'react';
 
 // useSSE: abre EventSource em /stream?token=<...> e chama onBotUpdate(botKey)
 // quando um bot finaliza ciclo. Reconecta automaticamente após 5s.
-export function useSSE(onBotUpdate) {
+// token: re-abre a conexão sempre que o token mudar (login/logout).
+export function useSSE(onBotUpdate, token) {
   const cbRef = useRef(onBotUpdate);
   cbRef.current = onBotUpdate;
 
   useEffect(() => {
-    if (!cbRef.current) return;
-    const token = localStorage.getItem('erp_token');
     if (!token) return;
 
     let es;
@@ -30,5 +29,5 @@ export function useSSE(onBotUpdate) {
 
     connect();
     return () => { es?.close(); clearTimeout(retryTimer); };
-  }, []); // cbRef mantém callback atualizado sem re-criar a conexão
+  }, [token]); // re-executa quando token muda (após login)
 }

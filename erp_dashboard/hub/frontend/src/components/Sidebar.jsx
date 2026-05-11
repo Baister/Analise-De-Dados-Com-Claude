@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { apiFetch } from '../hooks/useApi';
 
 const STATUS_COLOR = {
@@ -6,6 +6,13 @@ const STATUS_COLOR = {
   executando: '#d29922',
   erro:       '#da3633',
 };
+
+function fmt_secs(s) {
+  if (s === null || s === undefined) return '—';
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return m > 0 ? `${m}m ${sec < 10 ? '0' : ''}${sec}s` : `${sec}s`;
+}
 
 function BotDot({ status }) {
   const color = STATUS_COLOR[status] || '#8b949e';
@@ -17,24 +24,38 @@ function BotDot({ status }) {
   );
 }
 
-function BotStatusBar({ bots }) {
+function BotStatusBar({ bots, fetchAge }) {
   const entries = Object.entries(bots);
   if (!entries.length) return null;
   return (
-    <div className="px-4 py-3 border-t border-card_border">
-      <p className="text-subtext text-[9px] uppercase tracking-wider mb-2">Bots</p>
-      <div className="flex flex-col gap-1.5">
-        {entries.map(([name, info]) => (
-          <div key={name} className="flex items-center gap-2">
-            <BotDot status={info.status} />
-            <span className="text-subtext text-[10px] capitalize">{name}</span>
-            {info.ultimo_update && (
-              <span className="text-[9px] text-subtext ml-auto opacity-60">
-                {info.ultimo_update}
-              </span>
-            )}
-          </div>
-        ))}
+    <div className="px-3 py-3 border-t border-card_border">
+      <p className="text-subtext text-[9px] uppercase tracking-wider mb-2">Bots · Próx. atualização</p>
+      <div className="flex flex-col gap-2">
+        {entries.map(([name, info]) => {
+          const rawSecs = info.seconds_until_next;
+          const remaining = rawSecs !== null && rawSecs !== undefined
+            ? Math.max(0, rawSecs - fetchAge)
+            : null;
+
+          let countdown;
+          if (info.status === 'executando') {
+            countdown = <span style={{ color: STATUS_COLOR.executando }} className="text-[9px]">atualizando…</span>;
+          } else if (remaining === null) {
+            countdown = <span className="text-[9px] text-subtext opacity-50">aguardando</span>;
+          } else if (remaining === 0) {
+            countdown = <span style={{ color: STATUS_COLOR.executando }} className="text-[9px]">em breve</span>;
+          } else {
+            countdown = <span className="text-[9px] text-subtext">{fmt_secs(remaining)}</span>;
+          }
+
+          return (
+            <div key={name} className="flex items-center gap-1.5">
+              <BotDot status={info.status} />
+              <span className="text-subtext text-[10px] capitalize flex-1">{name}</span>
+              {countdown}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -42,16 +63,30 @@ function BotStatusBar({ bots }) {
 
 export default function Sidebar({ routes, activePage, onNavigate }) {
   const [bots, setBots] = useState({});
+  const [fetchAge, setFetchAge] = useState(0);
+  const fetchTimeRef = useRef(Date.now());
 
   useEffect(() => {
     function fetchStatus() {
       apiFetch('/status')
-        .then(d => setBots(d.bots || {}))
+        .then(d => {
+          if (d) {
+            setBots(d.bots || {});
+            fetchTimeRef.current = Date.now();
+            setFetchAge(0);
+          }
+        })
         .catch(() => {});
     }
     fetchStatus();
-    const id = setInterval(fetchStatus, 30_000);
-    return () => clearInterval(id);
+    const pollId = setInterval(fetchStatus, 30_000);
+
+    // tick every second to decrement countdown
+    const tickId = setInterval(() => {
+      setFetchAge(Math.floor((Date.now() - fetchTimeRef.current) / 1000));
+    }, 1000);
+
+    return () => { clearInterval(pollId); clearInterval(tickId); };
   }, []);
 
   return (
@@ -81,7 +116,7 @@ export default function Sidebar({ routes, activePage, onNavigate }) {
         })}
       </nav>
 
-      <BotStatusBar bots={bots} />
+      <BotStatusBar bots={bots} fetchAge={fetchAge} />
     </aside>
   );
 }

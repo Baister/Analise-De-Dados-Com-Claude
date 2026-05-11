@@ -21,7 +21,7 @@ export default function App() {
     setLastUpdate(prev => ({ ...prev, [botKey]: Date.now() }));
   }, []);
 
-  useSSE(token ? handleBotUpdate : null);
+  useSSE(handleBotUpdate, token);
 
   if (!token) {
     return <LoginScreen onLogin={() => setToken(localStorage.getItem('erp_token'))} />;

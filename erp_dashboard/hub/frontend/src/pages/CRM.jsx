@@ -17,7 +17,7 @@ const INAT_COLS = [
 ];
 
 export default function CRM({ refreshTrigger }) {
-  const { data, loading, error } = useDados('crm', refreshTrigger);
+  const { data, loading, error, isEmpty } = useDados('crm', refreshTrigger);
   const [filters, setFilters] = useState({});
 
   const convPorVendedor = data?.conv_por_vendedor ?? [];
@@ -44,6 +44,17 @@ export default function CRM({ refreshTrigger }) {
     return (
       <div className="flex items-center justify-center h-64 text-accent_red text-sm">
         Erro ao carregar dados: {error}
+      </div>
+    );
+  }
+
+  if (isEmpty) {
+    return (
+      <div className="flex items-center justify-center h-64 text-subtext text-sm">
+        <div className="text-center space-y-1">
+          <p>Bot CRM está processando dados do banco…</p>
+          <p className="text-xs opacity-60">A página atualiza automaticamente quando concluir.</p>
+        </div>
       </div>
     );
   }

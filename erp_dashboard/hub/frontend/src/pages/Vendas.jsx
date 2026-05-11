@@ -8,7 +8,7 @@ import { brl, pct, shortBrl } from '../utils/format';
 import { applyFilters, getUniqueValues } from '../utils/filters';
 
 export default function Vendas({ refreshTrigger }) {
-  const { data, loading, error } = useDados('vendas', refreshTrigger);
+  const { data, loading, error, isEmpty } = useDados('vendas', refreshTrigger);
   const [filters, setFilters] = useState({});
 
   const topVendedores = data?.top_vendedores ?? [];
@@ -39,6 +39,17 @@ export default function Vendas({ refreshTrigger }) {
     return (
       <div className="flex items-center justify-center h-64 text-accent_red text-sm">
         Erro ao carregar dados: {error}
+      </div>
+    );
+  }
+
+  if (isEmpty) {
+    return (
+      <div className="flex items-center justify-center h-64 text-subtext text-sm">
+        <div className="text-center space-y-1">
+          <p>Bot Vendas está processando dados do banco…</p>
+          <p className="text-xs opacity-60">A página atualiza automaticamente quando concluir.</p>
+        </div>
       </div>
     );
   }

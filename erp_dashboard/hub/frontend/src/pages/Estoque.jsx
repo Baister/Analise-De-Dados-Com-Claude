@@ -24,7 +24,7 @@ const CRITICOS_COLS = [
 ];
 
 export default function Estoque({ refreshTrigger }) {
-  const { data, loading, error } = useDados('estoque', refreshTrigger);
+  const { data, loading, error, isEmpty } = useDados('estoque', refreshTrigger);
   const [filters, setFilters] = useState({});
 
   const criticos = data?.criticos ?? [];
@@ -68,6 +68,17 @@ export default function Estoque({ refreshTrigger }) {
     return (
       <div className="flex items-center justify-center h-64 text-accent_red text-sm">
         Erro ao carregar dados: {error}
+      </div>
+    );
+  }
+
+  if (isEmpty) {
+    return (
+      <div className="flex items-center justify-center h-64 text-subtext text-sm">
+        <div className="text-center space-y-1">
+          <p>Bot Estoque está processando dados do banco…</p>
+          <p className="text-xs opacity-60">O Estoque tem muitos dados e pode levar alguns minutos. A página atualiza automaticamente.</p>
+        </div>
       </div>
     );
   }

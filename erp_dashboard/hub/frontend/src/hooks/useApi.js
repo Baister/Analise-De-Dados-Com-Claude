@@ -10,7 +10,7 @@ export async function apiFetch(path, opts = {}) {
   if (res.status === 401) {
     localStorage.removeItem('erp_token');
     location.reload();
-    return;
+    return null;
   }
   if (!res.ok) {
     const text = await res.text();
@@ -21,8 +21,9 @@ export async function apiFetch(path, opts = {}) {
 
 // useDados: hook para páginas que consomem um único bot.
 // refreshTrigger: qualquer valor — mudança dispara refetch.
+// Polling a cada 60s como fallback quando SSE não disparou.
 export function useDados(botKey, refreshTrigger) {
-  const [dados, setDados] = useState(null);
+  const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -31,7 +32,7 @@ export function useDados(botKey, refreshTrigger) {
     setLoading(true);
     try {
       const d = await apiFetch(`/dados/${botKey}`);
-      setDados(d);
+      setData(d ?? null);
       setError(null);
     } catch (e) {
       setError(e.message);
@@ -40,7 +41,17 @@ export function useDados(botKey, refreshTrigger) {
     }
   }, [botKey]);
 
+  // Fetch on mount and when SSE fires (refreshTrigger changes)
   useEffect(() => { fetchDados(); }, [fetchDados, refreshTrigger]);
 
-  return { dados, loading, error, refetch: fetchDados };
+  // Polling fallback: re-fetch every 60s in case SSE is unavailable
+  useEffect(() => {
+    const id = setInterval(fetchDados, 60_000);
+    return () => clearInterval(id);
+  }, [fetchDados]);
+
+  // Bot hasn't finished first analysis yet (resultado still empty {})
+  const isEmpty = data !== null && typeof data === 'object' && Object.keys(data).length === 0;
+
+  return { data, loading, error, refetch: fetchDados, isEmpty };
 }

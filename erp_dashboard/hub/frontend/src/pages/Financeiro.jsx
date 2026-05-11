@@ -14,7 +14,7 @@ const INAD_COLS = [
 ];
 
 export default function Financeiro({ refreshTrigger }) {
-  const { data, loading, error } = useDados('financeiro', refreshTrigger);
+  const { data, loading, error, isEmpty } = useDados('financeiro', refreshTrigger);
 
   if (loading && !data) {
     return (
@@ -28,6 +28,17 @@ export default function Financeiro({ refreshTrigger }) {
     return (
       <div className="flex items-center justify-center h-64 text-accent_red text-sm">
         Erro ao carregar dados: {error}
+      </div>
+    );
+  }
+
+  if (isEmpty) {
+    return (
+      <div className="flex items-center justify-center h-64 text-subtext text-sm">
+        <div className="text-center space-y-1">
+          <p>Bot Financeiro está processando dados do banco…</p>
+          <p className="text-xs opacity-60">A página atualiza automaticamente quando concluir.</p>
+        </div>
       </div>
     );
   }
