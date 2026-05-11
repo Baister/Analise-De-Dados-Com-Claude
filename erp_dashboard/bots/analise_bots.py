@@ -4,6 +4,7 @@
 # Separação Orçamento × Venda usa Blue.dbo.TbOrcPedVnd.OrcPedVnd (1=Orc, 2=Venda).
 
 import concurrent.futures
+import re as _re
 import pandas as pd
 import threading
 import time
@@ -24,6 +25,10 @@ _MES_INI        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)"
 _MES_FIM        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)"
 _pl = "','".join(PLANOS_EXCLUIR_FAT)
 _EXCLUIR_PLANO  = f"AND v.CodPlanoVnd NOT IN ('{_pl}')"
+
+
+def _valid_date(s: str) -> bool:
+    return bool(s and _re.fullmatch(r'\d{4}-\d{2}(-\d{2})?', s))
 
 
 def _safe_float(df: pd.DataFrame, col: str) -> float:
@@ -197,6 +202,93 @@ class BotDashboard(BaseBot):
             "marcas_mes":         df_marcas.to_dict("records"),
         }
 
+    def analisar_filtrado(self, filtros: dict) -> dict:
+        parts  = [f"v.DtVnd >= {_MES_INI}", f"v.DtVnd < {_MES_FIM}",
+                  "d.Cancelado = ''", "d.Fat = 1"]
+        params: list = []
+
+        if filtros.get("vendedor"):
+            parts.append("v.Vendedor LIKE ?")
+            params.append(f"%{filtros['vendedor'][:100]}%")
+        if filtros.get("marca"):
+            parts.append("EXISTS (SELECT 1 FROM Blue.dbo.vmVndItemDoc ii WITH (NOLOCK)"
+                         " WHERE ii.NrDoc=v.NrDoc AND ii.NSUDoc=v.NSUDoc AND ii.DescrMarca LIKE ?)")
+            params.append(f"%{filtros['marca'][:100]}%")
+
+        where_v = " AND ".join(parts)
+
+        df_kpi = db.query(f"""
+            SELECT
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS venda_bruta,
+                SUM(CASE WHEN v.CustoRepTotal < 0  THEN v.ValVndTotal ELSE 0 END) AS devolucao,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END)   AS qtd_documentos,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal < 0  THEN v.NrDoc END)   AS qtd_devolucoes,
+                COUNT(DISTINCT v.CodCli)                                           AS clientes_ativos,
+                AVG(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal END)        AS ticket_medio
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE {where_v} {_EXCLUIR_PLANO}
+        """, params if params else None)
+
+        marca_params: list = []
+        marca_parts = [f"i.DtVnd >= {_MES_INI}", f"i.DtVnd < {_MES_FIM}",
+                       "i.Fat = 1", "i.DescrMarca IS NOT NULL", "i.CustoRepTotItem >= 0"]
+        if filtros.get("marca"):
+            marca_parts.append("i.DescrMarca LIKE ?")
+            marca_params.append(f"%{filtros['marca'][:100]}%")
+
+        df_marcas = db.query(f"""
+            SELECT TOP 8 i.DescrMarca,
+                SUM(i.PrecoVndTotItem) AS faturamento,
+                SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem) AS margem_bruta,
+                SUM(i.QtdItem) AS quantidade
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            WHERE {" AND ".join(marca_parts)}
+            GROUP BY i.DescrMarca ORDER BY faturamento DESC
+        """, marca_params if marca_params else None)
+
+        df_vend = db.query(f"""
+            SELECT TOP 10 v.Vendedor, v.CodVend,
+                SUM(v.ValVndTotal) AS total_venda,
+                COUNT(DISTINCT v.NrDoc) AS qtd_pedidos,
+                AVG(v.ValVndTotal) AS ticket_medio
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE {where_v} {_EXCLUIR_PLANO}
+            GROUP BY v.Vendedor, v.CodVend ORDER BY total_venda DESC
+        """, params if params else None)
+
+        df_diario = db.query(f"""
+            SELECT TOP 30 CONVERT(date, v.DtVnd) AS dia, SUM(v.ValVndTotal) AS faturamento
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE v.DtVnd >= DATEADD(day, -30, GETDATE()) AND d.Cancelado = '' AND d.Fat = 1
+              {_EXCLUIR_PLANO}
+            GROUP BY CONVERT(date, v.DtVnd) ORDER BY dia
+        """)
+
+        venda_bruta = _safe_float(df_kpi, "venda_bruta")
+        devolucao   = _safe_float(df_kpi, "devolucao")
+        venda_liq   = venda_bruta + devolucao
+        meta        = ALERTAS.get("meta_faturamento_mensal", 400000)
+        pct         = round(venda_liq / meta * 100, 1) if meta else 0
+
+        return {
+            "faturamento_atual":  venda_liq,
+            "venda_bruta":        venda_bruta,
+            "devolucao":          devolucao,
+            "venda_liquida":      venda_liq,
+            "qtd_documentos":     _safe_int(df_kpi, "qtd_documentos"),
+            "qtd_devolucoes":     _safe_int(df_kpi, "qtd_devolucoes"),
+            "clientes_ativos":    _safe_int(df_kpi, "clientes_ativos"),
+            "ticket_medio":       _safe_float(df_kpi, "ticket_medio"),
+            "pct_meta":           pct,
+            "meta_mensal":        meta,
+            "top_vendedores":     df_vend.to_dict("records"),
+            "faturamento_diario": df_diario.to_dict("records"),
+            "marcas_mes":         df_marcas.to_dict("records"),
+        }
+
 
 # ──────────────────────────────────────────────────────────────────
 #  BOT VENDAS  — análise por marca, grupo, vendedor e devoluções
@@ -329,6 +421,87 @@ class BotVendas(BaseBot):
             "total_devolucoes":  _safe_float(df_dev, "total_devolucoes"),
             "por_marca":         df_marca.to_dict("records"),
             "por_grupo":         df_grupo.to_dict("records"),
+            "por_vendedor":      df_vend.to_dict("records"),
+        }
+
+    def analisar_filtrado(self, filtros: dict) -> dict:
+        parts  = [f"v.DtVnd >= {_MES_INI}", f"v.DtVnd < {_MES_FIM}",
+                  "d.Cancelado = ''", "d.Fat = 1"]
+        params: list = []
+
+        if filtros.get("vendedor"):
+            parts.append("v.Vendedor LIKE ?")
+            params.append(f"%{filtros['vendedor'][:100]}%")
+        if filtros.get("marca"):
+            parts.append("EXISTS (SELECT 1 FROM Blue.dbo.vmVndItemDoc ii WITH (NOLOCK)"
+                         " WHERE ii.NrDoc=v.NrDoc AND ii.NSUDoc=v.NSUDoc AND ii.DescrMarca LIKE ?)")
+            params.append(f"%{filtros['marca'][:100]}%")
+
+        where_v = " AND ".join(parts)
+
+        df_kpi = db.query(f"""
+            SELECT
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS venda_bruta,
+                SUM(CASE WHEN v.CustoRepTotal < 0  THEN v.ValVndTotal ELSE 0 END) AS devolucao,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END)   AS qtd_vendas,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal < 0  THEN v.NrDoc END)   AS qtd_devolucoes,
+                AVG(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal END)        AS ticket_medio
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE {where_v} {_EXCLUIR_PLANO}
+        """, params if params else None)
+
+        i_parts: list = [f"i.DtVnd >= {_MES_INI}", f"i.DtVnd < {_MES_FIM}",
+                         "d.Cancelado = ''", "i.Fat = 1"]
+        i_params: list = []
+        if filtros.get("vendedor"):
+            i_parts.append("EXISTS (SELECT 1 FROM Blue.dbo.vmVndDoc vv WITH (NOLOCK)"
+                           " WHERE vv.NrDoc=i.NrDoc AND vv.NSUDoc=i.NSUDoc AND vv.Vendedor LIKE ?)")
+            i_params.append(f"%{filtros['vendedor'][:100]}%")
+        if filtros.get("marca"):
+            i_parts.append("i.DescrMarca LIKE ?")
+            i_params.append(f"%{filtros['marca'][:100]}%")
+
+        df_marca = db.query(f"""
+            SELECT TOP 20 i.CodMarca, i.DescrMarca,
+                SUM(i.PrecoVndTotItem) AS faturamento,
+                SUM(i.QtdItem) AS quantidade,
+                SUM(i.CustoRepTotItem) AS custo_total,
+                SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem) AS margem_bruta
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+            WHERE {" AND ".join(i_parts)}
+            GROUP BY i.CodMarca, i.DescrMarca ORDER BY faturamento DESC
+        """, i_params if i_params else None)
+
+        df_vend = db.query(f"""
+            SELECT TOP 10 v.Vendedor, v.CodVend,
+                SUM(v.ValVndTotal) AS total_venda,
+                COUNT(DISTINCT v.NrDoc) AS qtd_pedidos,
+                AVG(v.ValVndTotal) AS ticket_medio,
+                SUM(v.CustoRepTotal) AS custo_total
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE {where_v} {_EXCLUIR_PLANO}
+            GROUP BY v.Vendedor, v.CodVend ORDER BY total_venda DESC
+        """, params if params else None)
+
+        margem      = sum(float(r.get("margem_bruta", 0) or 0) for r in df_marca.to_dict("records"))
+        venda_bruta = _safe_float(df_kpi, "venda_bruta")
+        devolucao   = _safe_float(df_kpi, "devolucao")
+
+        return {
+            "faturamento_total": venda_bruta + devolucao,
+            "venda_bruta":       venda_bruta,
+            "devolucao":         devolucao,
+            "venda_liquida":     venda_bruta + devolucao,
+            "qtd_vendas":        _safe_int(df_kpi, "qtd_vendas"),
+            "qtd_devolucoes":    _safe_int(df_kpi, "qtd_devolucoes"),
+            "ticket_medio":      _safe_float(df_kpi, "ticket_medio"),
+            "margem_total":      margem,
+            "total_devolucoes":  devolucao,
+            "por_marca":         df_marca.to_dict("records"),
+            "por_grupo":         [],
             "por_vendedor":      df_vend.to_dict("records"),
         }
 
@@ -766,7 +939,46 @@ class BotEstoque(BaseBot):
             "estq_os":                _recs(df_os),
         }
 
+    def analisar_filtrado(self, filtros: dict) -> dict:
+        self._load_schemas()
+        ev, et  = self._best("item", "vnd")
+        col_mrc = self._c(et, "DescrMarca", "Marca", "DescrMarcaItem", "NomeMarca",
+                              "DescrMarcaProd", "MarcaItem")
+        col_dtv = (self._c(et, "DtUltVnd", "DtUltimaVenda", "DtVnd", "UltDtVnd",
+                               "DtUltVenda", "DataUltVnd", "DataUltimaVenda", "DtUltimaVnd")
+                   or self._c(self._best("vnd", "item")[1],
+                               "DtUltVnd", "DtUltimaVenda", "DtVnd", "UltDtVnd"))
+        col_vlr = self._c(et, "VlrEstq", "ValEstq", "VlrTotEstq", "SaldoVlr",
+                              "ValorEstoque", "VlrTotalEstq", "ValTotEstq")
+        col_qtd = self._c(et, "QtdEstq", "SaldoEstq", "QtdSaldo", "Qtd",
+                              "QtdEstoque", "QtdTotEstq", "QtdTotalEstq")
 
+        parts:  list = ["1=1"]
+        params: list = []
+        if filtros.get("marca") and col_mrc:
+            parts.append(f"e.{col_mrc} LIKE ?")
+            params.append(f"%{filtros['marca'][:100]}%")
+        if filtros.get("dt_de") and _valid_date(filtros["dt_de"]) and col_dtv:
+            parts.append(f"e.{col_dtv} >= ?")
+            params.append(filtros["dt_de"])
+        if filtros.get("dt_ate") and _valid_date(filtros["dt_ate"]) and col_dtv:
+            parts.append(f"e.{col_dtv} <= ?")
+            params.append(filtros["dt_ate"])
+
+        r = self.analisar_rapido()
+        if params:
+            def _sum(col, alias):
+                return f"SUM(ISNULL({col},0)) AS {alias}" if col else f"0 AS {alias}"
+            where = " AND ".join(parts)
+            df_f = db.query(f"""
+                SELECT COUNT(*) AS total_itens,
+                       {_sum(col_vlr, 'valor_total_estoque')},
+                       {_sum(col_qtd, 'qtd_total')}
+                FROM {ev} e WITH (NOLOCK) WHERE {where}
+            """, params)
+            r["total_itens"]         = _safe_int(df_f,   "total_itens")
+            r["valor_total_estoque"] = _safe_float(df_f, "valor_total_estoque")
+        return r
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -875,6 +1087,20 @@ class BotFinanceiro(BaseBot):
             "total_inadimplencia":  float(df_inad["divida_total"].sum()) if not df_inad.empty else 0.0,
             "qtd_inadimplentes":    len(df_inad),
         }
+
+    def analisar_filtrado(self, filtros: dict) -> dict:
+        base = self.analisar()
+        if not filtros.get("dias_atraso_min"):
+            return base
+        try:
+            dias = int(filtros["dias_atraso_min"])
+        except (ValueError, TypeError):
+            return base
+        filtrados = [r for r in base.get("top_inadimplentes", [])
+                     if int(r.get("max_dias_atraso", 0) or 0) >= dias]
+        base["top_inadimplentes"] = filtrados
+        base["qtd_inadimplentes"] = len(filtrados)
+        return base
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -1045,6 +1271,42 @@ class BotCRM(BaseBot):
             "tipo_clientes_30d":  df_tipo_cli.to_dict("records"),
             "meta_vendedor":      meta_cats,
         }
+
+    def analisar_filtrado(self, filtros: dict) -> dict:
+        parts  = [f"o.DtOrcPedVnd >= {_MES_INI}", f"o.DtOrcPedVnd < {_MES_FIM}"]
+        params: list = []
+        if filtros.get("vendedor"):
+            parts.append("v.Vendedor LIKE ?")
+            params.append(f"%{filtros['vendedor'][:100]}%")
+        if filtros.get("marca"):
+            parts.append("i.DescrMarca LIKE ?")
+            params.append(f"%{filtros['marca'][:100]}%")
+
+        if not (filtros.get("vendedor") or filtros.get("marca")):
+            return self.analisar()
+
+        where = " AND ".join(parts)
+        df_conv = db.query(f"""
+            SELECT
+                COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END) AS total_orcamentos,
+                COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS total_convertidos,
+                CAST(COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS FLOAT) /
+                    NULLIF(COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END), 0) * 100 AS taxa_conversao_pct,
+                SUM(CASE WHEN o.OrcPedVnd = 1 THEN i.PrecoVndTotItem ELSE 0 END) AS valor_orcado,
+                SUM(CASE WHEN o.OrcPedVnd = 2 THEN i.PrecoVndTotItem ELSE 0 END) AS valor_convertido
+            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vmVndDoc v     WITH (NOLOCK) ON o.NrOrcPedVnd = v.NrDoc
+            INNER JOIN Blue.dbo.vmVndItemDoc i WITH (NOLOCK) ON o.NrOrcPedVnd = i.NrDoc
+            WHERE {where}
+        """, params)
+
+        base = self.analisar()
+        base["total_orcamentos"]   = _safe_int(df_conv, "total_orcamentos")
+        base["total_convertidos"]  = _safe_int(df_conv, "total_convertidos")
+        base["taxa_conversao_pct"] = round(_safe_float(df_conv, "taxa_conversao_pct"), 1)
+        base["valor_orcado"]       = _safe_float(df_conv, "valor_orcado")
+        base["valor_convertido"]   = _safe_float(df_conv, "valor_convertido")
+        return base
 
 
 # ──────────────────────────────────────────────────────────────────
