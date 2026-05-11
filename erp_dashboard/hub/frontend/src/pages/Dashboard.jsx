@@ -92,13 +92,12 @@ export default function Dashboard({ refreshTrigger }) {
   const pctMeta = metaVal > 0 ? ((kpis.faturamento_atual ?? 0) / metaVal) * 100 : (data?.pct_meta ?? 0);
 
   function handleFilterChange(newFilters) {
-    const newVend  = newFilters.Vendedor   && newFilters.Vendedor   !== 'todos' ? newFilters.Vendedor   : null;
-    const newMarca = newFilters.DescrMarca && newFilters.DescrMarca !== 'todos' ? newFilters.DescrMarca : null;
-    const vendChanged = newVend !== filtroVendedor;
-    if (vendChanged) {
+    const newVend  = newFilters.Vendedor   !== 'todos' ? (newFilters.Vendedor   ?? null) : null;
+    const newMarca = newFilters.DescrMarca !== 'todos' ? (newFilters.DescrMarca ?? null) : null;
+    if (newVend !== filtroVendedor) {
       setFiltroVendedor(newVend);
-      setFiltroMarca(newVend ? null : newMarca);
-    } else {
+      setFiltroMarca(null);
+    } else if (newMarca !== filtroMarca) {
       setFiltroMarca(newMarca);
       setFiltroVendedor(null);
     }
