@@ -1,12 +1,12 @@
-import { useState, useEffect } from 'react';
-import { useDados, apiFetch } from '../hooks/useApi';
+import { useState, useEffect, useMemo } from 'react';
+import { useFilteredDados, apiFetch } from '../hooks/useApi';
 import KpiCard from '../components/KpiCard';
 import FilterBar from '../components/FilterBar';
 import LineChart from '../charts/LineChart';
 import BarChart from '../charts/BarChart';
 import PieChart from '../charts/PieChart';
 import { brl, pct, shortBrl } from '../utils/format';
-import { applyFilters, getUniqueValues } from '../utils/filters';
+import { getUniqueValues } from '../utils/filters';
 
 function ProcessingScreen({ label }) {
   return (
@@ -20,9 +20,17 @@ function ProcessingScreen({ label }) {
 }
 
 export default function Dashboard({ refreshTrigger }) {
-  const { data, loading, error, isEmpty } = useDados('dashboard', refreshTrigger);
   const [meta, setMeta] = useState(null);
   const [filters, setFilters] = useState({});
+
+  const apiFilters = useMemo(() => {
+    const f = {};
+    if (filters.Vendedor)   f.vendedor = filters.Vendedor;
+    if (filters.DescrMarca) f.marca    = filters.DescrMarca;
+    return f;
+  }, [filters]);
+
+  const { data, loading, error, isEmpty } = useFilteredDados('dashboard', apiFilters, refreshTrigger);
 
   useEffect(() => {
     apiFetch('/config').then(d => d && setMeta(d.meta_faturamento_mensal)).catch(() => {});
@@ -57,9 +65,6 @@ export default function Dashboard({ refreshTrigger }) {
     { key: 'Vendedor',   label: 'Vendedor', type: 'select', options: vendedoresOpts },
     { key: 'DescrMarca', label: 'Marca',    type: 'select', options: marcasOpts },
   ];
-
-  const filteredVendedores = applyFilters(topVendedores, { Vendedor: filters.Vendedor });
-  const filteredMarcas     = applyFilters(marcasMes,     { DescrMarca: filters.DescrMarca });
 
   const metaVal  = meta ?? data?.meta_mensal ?? 0;
   const fatAtual = data?.faturamento_atual ?? 0;
@@ -108,7 +113,7 @@ export default function Dashboard({ refreshTrigger }) {
         <div className="bg-card border border-card_border rounded-lg p-4">
           <h2 className="text-sm font-semibold text-text_main mb-3">Top Vendedores</h2>
           <BarChart
-            data={filteredVendedores.slice(0, 10)}
+            data={topVendedores.slice(0, 10)}
             xKey="Vendedor"
             bars={[{ key: 'total_venda', label: 'Total', formatter: shortBrl }]}
             horizontal
@@ -122,7 +127,7 @@ export default function Dashboard({ refreshTrigger }) {
         <div className="bg-card border border-card_border rounded-lg p-4">
           <h2 className="text-sm font-semibold text-text_main mb-3">Faturamento por Marca</h2>
           <PieChart
-            data={filteredMarcas.slice(0, 8)}
+            data={marcasMes.slice(0, 8)}
             nameKey="DescrMarca"
             valueKey="faturamento"
             showValue
@@ -133,7 +138,7 @@ export default function Dashboard({ refreshTrigger }) {
         <div className="bg-card border border-card_border rounded-lg p-4">
           <h2 className="text-sm font-semibold text-text_main mb-3">Itens Vendidos por Marca</h2>
           <PieChart
-            data={filteredMarcas.slice(0, 8)}
+            data={marcasMes.slice(0, 8)}
             nameKey="DescrMarca"
             valueKey="quantidade"
             showValue

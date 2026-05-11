@@ -258,14 +258,37 @@ class BotDashboard(BaseBot):
             GROUP BY v.Vendedor, v.CodVend ORDER BY total_venda DESC
         """, params if params else None)
 
-        df_diario = db.query(f"""
-            SELECT TOP 30 CONVERT(date, v.DtVnd) AS dia, SUM(v.ValVndTotal) AS faturamento
-            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE v.DtVnd >= DATEADD(day, -30, GETDATE()) AND d.Cancelado = '' AND d.Fat = 1
-              {_EXCLUIR_PLANO}
-            GROUP BY CONVERT(date, v.DtVnd) ORDER BY dia
-        """)
+        # Faturamento diário — filtrado por marca (item level) e/ou vendedor (doc level)
+        if filtros.get("marca"):
+            # Filtrar pelo valor do item da marca específica por dia
+            diario_parts:  list = ["i.DtVnd >= DATEADD(day, -30, GETDATE())",
+                                   "d.Cancelado = ''", "i.Fat = 1",
+                                   "i.CustoRepTotItem >= 0"]
+            diario_params: list = []
+            diario_parts.append("i.DescrMarca LIKE ?")
+            diario_params.append(f"%{filtros['marca'][:100]}%")
+            if filtros.get("vendedor"):
+                diario_parts.append(
+                    "EXISTS (SELECT 1 FROM Blue.dbo.vmVndDoc vv WITH (NOLOCK)"
+                    " WHERE vv.NrDoc=i.NrDoc AND vv.NSUDoc=i.NSUDoc AND vv.Vendedor LIKE ?)")
+                diario_params.append(f"%{filtros['vendedor'][:100]}%")
+            df_diario = db.query(f"""
+                SELECT TOP 30 CONVERT(date, i.DtVnd) AS dia,
+                       SUM(i.PrecoVndTotItem) AS faturamento
+                FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+                INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
+                WHERE {" AND ".join(diario_parts)}
+                GROUP BY CONVERT(date, i.DtVnd) ORDER BY dia
+            """, diario_params)
+        else:
+            df_diario = db.query(f"""
+                SELECT TOP 30 CONVERT(date, v.DtVnd) AS dia, SUM(v.ValVndTotal) AS faturamento
+                FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc=d.NrDoc AND v.NSUDoc=d.NSUDoc
+                WHERE v.DtVnd >= DATEADD(day, -30, GETDATE()) AND d.Cancelado = '' AND d.Fat = 1
+                  {_EXCLUIR_PLANO} {("AND v.Vendedor LIKE ?" if filtros.get('vendedor') else '')}
+                GROUP BY CONVERT(date, v.DtVnd) ORDER BY dia
+            """, ([f"%{filtros['vendedor'][:100]}%"] if filtros.get("vendedor") else None))
 
         venda_bruta = _safe_float(df_kpi, "venda_bruta")
         devolucao   = _safe_float(df_kpi, "devolucao")
