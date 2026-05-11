@@ -97,7 +97,7 @@ export default function Dashboard({ refreshTrigger }) {
     const vendChanged = newVend !== filtroVendedor;
     if (vendChanged) {
       setFiltroVendedor(newVend);
-      setFiltroMarca(null);
+      setFiltroMarca(newVend ? null : newMarca);
     } else {
       setFiltroMarca(newMarca);
       setFiltroVendedor(null);
