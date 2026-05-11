@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useDados } from '../hooks/useApi';
+import { useState, useMemo } from 'react';
+import { useFilteredDados } from '../hooks/useApi';
 import KpiCard from '../components/KpiCard';
 import FilterBar from '../components/FilterBar';
 import BarChart from '../charts/BarChart';
@@ -8,8 +8,14 @@ import { brl, pct, shortBrl } from '../utils/format';
 import { applyFilters, getUniqueValues } from '../utils/filters';
 
 export default function Vendas({ refreshTrigger }) {
-  const { data, loading, error, isEmpty } = useDados('vendas', refreshTrigger);
   const [filters, setFilters] = useState({});
+  const apiFilters = useMemo(() => {
+    const f = {};
+    if (filters.Vendedor)   f.vendedor = filters.Vendedor;
+    if (filters.DescrMarca) f.marca    = filters.DescrMarca;
+    return f;
+  }, [filters]);
+  const { data, loading, error, isEmpty } = useFilteredDados('vendas', apiFilters, refreshTrigger);
 
   const topVendedores = data?.top_vendedores ?? [];
   const marcas = data?.marcas_mes ?? [];

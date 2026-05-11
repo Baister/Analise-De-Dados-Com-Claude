@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useDados } from '../hooks/useApi';
+import { useState, useMemo } from 'react';
+import { useFilteredDados } from '../hooks/useApi';
 import KpiCard from '../components/KpiCard';
 import FilterBar from '../components/FilterBar';
 import PieChart from '../charts/PieChart';
@@ -17,8 +17,14 @@ const INAT_COLS = [
 ];
 
 export default function CRM({ refreshTrigger }) {
-  const { data, loading, error, isEmpty } = useDados('crm', refreshTrigger);
   const [filters, setFilters] = useState({});
+  const apiFilters = useMemo(() => {
+    const f = {};
+    if (filters.Vendedor)   f.vendedor = filters.Vendedor;
+    if (filters.DescrMarca) f.marca    = filters.DescrMarca;
+    return f;
+  }, [filters]);
+  const { data, loading, error, isEmpty } = useFilteredDados('crm', apiFilters, refreshTrigger);
 
   const convPorVendedor = data?.conv_por_vendedor ?? [];
   const inativos = data?.inativos_lista ?? [];

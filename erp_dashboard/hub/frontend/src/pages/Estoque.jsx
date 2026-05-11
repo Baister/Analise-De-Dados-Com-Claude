@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useDados } from '../hooks/useApi';
+import { useState, useMemo } from 'react';
+import { useFilteredDados } from '../hooks/useApi';
 import KpiCard from '../components/KpiCard';
 import FilterBar from '../components/FilterBar';
 import BarChart from '../charts/BarChart';
@@ -24,8 +24,15 @@ const CRITICOS_COLS = [
 ];
 
 export default function Estoque({ refreshTrigger }) {
-  const { data, loading, error, isEmpty } = useDados('estoque', refreshTrigger);
   const [filters, setFilters] = useState({});
+  const apiFilters = useMemo(() => {
+    const f = {};
+    if (filters.DescrMarca)    f.marca  = filters.DescrMarca;
+    if (filters.dtUltVnd_de)   f.dt_de  = filters.dtUltVnd_de;
+    if (filters.dtUltVnd_ate)  f.dt_ate = filters.dtUltVnd_ate;
+    return f;
+  }, [filters]);
+  const { data, loading, error, isEmpty } = useFilteredDados('estoque', apiFilters, refreshTrigger);
 
   const criticos = data?.criticos ?? [];
   const porMarca = data?.por_marca ?? [];

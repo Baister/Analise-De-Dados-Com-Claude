@@ -1,4 +1,4 @@
-import { useDados } from '../hooks/useApi';
+import { useFilteredDados } from '../hooks/useApi';
 import KpiCard from '../components/KpiCard';
 import PieChart from '../charts/PieChart';
 import DataTable from '../components/DataTable';
@@ -14,7 +14,7 @@ const INAD_COLS = [
 ];
 
 export default function Financeiro({ refreshTrigger }) {
-  const { data, loading, error, isEmpty } = useDados('financeiro', refreshTrigger);
+  const { data, loading, error, isEmpty } = useFilteredDados('financeiro', {}, refreshTrigger);
 
   if (loading && !data) {
     return (
