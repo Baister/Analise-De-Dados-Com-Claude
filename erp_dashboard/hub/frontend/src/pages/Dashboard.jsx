@@ -118,16 +118,28 @@ export default function Dashboard({ refreshTrigger }) {
         </div>
       </div>
 
-      <div className="bg-card border border-card_border rounded-lg p-4">
-        <h2 className="text-sm font-semibold text-text_main mb-3">Faturamento por Marca</h2>
-        <PieChart
-          data={filteredMarcas.slice(0, 6)}
-          nameKey="DescrMarca"
-          valueKey="faturamento"
-          showValue
-          formatter={shortBrl}
-          height={220}
-        />
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-card border border-card_border rounded-lg p-4">
+          <h2 className="text-sm font-semibold text-text_main mb-3">Faturamento por Marca</h2>
+          <PieChart
+            data={filteredMarcas.slice(0, 8)}
+            nameKey="DescrMarca"
+            valueKey="faturamento"
+            showValue
+            formatter={shortBrl}
+            height={220}
+          />
+        </div>
+        <div className="bg-card border border-card_border rounded-lg p-4">
+          <h2 className="text-sm font-semibold text-text_main mb-3">Itens Vendidos por Marca</h2>
+          <PieChart
+            data={filteredMarcas.slice(0, 8)}
+            nameKey="DescrMarca"
+            valueKey="quantidade"
+            showValue
+            height={220}
+          />
+        </div>
       </div>
     </div>
   );
