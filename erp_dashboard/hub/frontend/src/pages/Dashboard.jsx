@@ -25,8 +25,8 @@ export default function Dashboard({ refreshTrigger }) {
 
   const apiFilters = useMemo(() => {
     const f = {};
-    if (filters.Vendedor)   f.vendedor = filters.Vendedor;
-    if (filters.DescrMarca) f.marca    = filters.DescrMarca;
+    if (filters.Vendedor   && filters.Vendedor   !== 'todos') f.vendedor = filters.Vendedor;
+    if (filters.DescrMarca && filters.DescrMarca !== 'todos') f.marca    = filters.DescrMarca;
     return f;
   }, [filters]);
 

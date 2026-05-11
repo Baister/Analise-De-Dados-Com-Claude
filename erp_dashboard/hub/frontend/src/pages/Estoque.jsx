@@ -27,7 +27,7 @@ export default function Estoque({ refreshTrigger }) {
   const [filters, setFilters] = useState({});
   const apiFilters = useMemo(() => {
     const f = {};
-    if (filters.DescrMarca)    f.marca  = filters.DescrMarca;
+    if (filters.DescrMarca && filters.DescrMarca !== 'todos') f.marca  = filters.DescrMarca;
     if (filters.dtUltVnd_de)   f.dt_de  = filters.dtUltVnd_de;
     if (filters.dtUltVnd_ate)  f.dt_ate = filters.dtUltVnd_ate;
     return f;
