@@ -1,6 +1,6 @@
 import {
   BarChart as RC, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, LabelList, Legend,
+  CartesianGrid, LabelList, Legend, Cell,
 } from 'recharts';
 
 const TOOLTIP_STYLE = {
@@ -22,11 +22,12 @@ function Empty() {
 
 // bars: [{ key, label?, formatter? }]
 // horizontal: inverte eixos para barras horizontais
-// showLabels: mostra valor ao final da barra (branco negrito)
+// showLabels: mostra valor ao final da barra
 // stacked: empilha múltiplas barras
+// highlightKey: valor de xKey a destacar (outros ficam com opacidade reduzida)
 export default function BarChart({
   data, xKey, bars = [], horizontal = false, showLabels = false,
-  stacked = false, colors = COLORS, height = 220,
+  stacked = false, colors = COLORS, height = 220, highlightKey = null,
 }) {
   if (!data?.length || !bars.length) return <Empty />;
 
@@ -62,6 +63,13 @@ export default function BarChart({
             stackId={stacked ? 'stack' : undefined}
             radius={!stacked || idx === bars.length - 1 ? [3, 3, 0, 0] : undefined}
           >
+            {highlightKey && data.map((entry, i) => (
+              <Cell
+                key={`cell-${i}`}
+                fill={colors[idx % colors.length]}
+                fillOpacity={entry[xKey] === highlightKey ? 1 : 0.35}
+              />
+            ))}
             {showLabels && (
               <LabelList
                 dataKey={bar.key}
