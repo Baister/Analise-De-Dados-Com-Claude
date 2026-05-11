@@ -9,7 +9,7 @@ import threading
 import time
 import logging
 from datetime import datetime
-from config.settings import BOT_INTERVALS, ALERTAS, PLANO_EXCLUIR_FAT
+from config.settings import BOT_INTERVALS, ALERTAS, PLANOS_EXCLUIR_FAT
 from core.database import db
 from core.cache import cache as _cache
 
@@ -22,7 +22,8 @@ DIAS_CRITICO    = ALERTAS.get("estoque_critico_dias_sem_vnd", 90)
 DIAS_LISTA_INAT = 30  # mostra inativos a partir de 30 dias
 _MES_INI        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)"
 _MES_FIM        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)"
-_EXCLUIR_PLANO  = f"AND v.CodPlanoVnd <> {PLANO_EXCLUIR_FAT}"  # exclui plano 25 dos totais
+_pl = "','".join(PLANOS_EXCLUIR_FAT)
+_EXCLUIR_PLANO  = f"AND v.CodPlanoVnd NOT IN ('{_pl}')"
 
 
 def _safe_float(df: pd.DataFrame, col: str) -> float:
