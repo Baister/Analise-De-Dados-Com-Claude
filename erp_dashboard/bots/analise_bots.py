@@ -112,12 +112,14 @@ class BotDashboard(BaseBot):
     def analisar(self) -> dict:
         df_kpi = db.query(f"""
             SELECT
-                SUM(v.ValVndTotal)        AS faturamento_atual,
-                COUNT(DISTINCT v.NrDoc)   AS qtd_documentos,
-                COUNT(DISTINCT v.CodCli)  AS clientes_ativos,
-                AVG(v.ValVndTotal)        AS ticket_medio
-            FROM Blue.dbo.vmVndDoc v
-            INNER JOIN Blue.dbo.vwVndDoc d ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS venda_bruta,
+                SUM(CASE WHEN v.CustoRepTotal < 0  THEN v.ValVndTotal ELSE 0 END) AS devolucao,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END)   AS qtd_documentos,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal < 0  THEN v.NrDoc END)   AS qtd_devolucoes,
+                COUNT(DISTINCT v.CodCli)                                           AS clientes_ativos,
+                AVG(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal END)        AS ticket_medio
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
             WHERE v.DtVnd >= {_MES_INI}
               AND v.DtVnd <  {_MES_FIM}
               AND d.Cancelado    = ''
@@ -161,23 +163,31 @@ class BotDashboard(BaseBot):
             SELECT TOP 8
                 i.DescrMarca,
                 SUM(i.PrecoVndTotItem)                           AS faturamento,
-                SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem) AS margem_bruta
-            FROM Blue.dbo.vmVndItemDoc i
+                SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem) AS margem_bruta,
+                SUM(i.QtdItem)                                   AS quantidade
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
             WHERE i.DtVnd >= {_MES_INI}
               AND i.DtVnd <  {_MES_FIM}
               AND i.Fat = 1
               AND i.DescrMarca IS NOT NULL
+              AND i.CustoRepTotItem >= 0
             GROUP BY i.DescrMarca
             ORDER BY faturamento DESC
         """)
 
-        fat  = _safe_float(df_kpi, "faturamento_atual")
-        meta = ALERTAS.get("meta_faturamento_mensal", 400000)
-        pct  = round(fat / meta * 100, 1) if meta else 0
+        venda_bruta = _safe_float(df_kpi, "venda_bruta")
+        devolucao   = _safe_float(df_kpi, "devolucao")
+        venda_liq   = venda_bruta + devolucao  # devolucao é negativa
+        meta        = ALERTAS.get("meta_faturamento_mensal", 400000)
+        pct         = round(venda_liq / meta * 100, 1) if meta else 0
 
         return {
-            "faturamento_atual":  fat,
+            "faturamento_atual":  venda_liq,
+            "venda_bruta":        venda_bruta,
+            "devolucao":          devolucao,
+            "venda_liquida":      venda_liq,
             "qtd_documentos":     _safe_int(df_kpi, "qtd_documentos"),
+            "qtd_devolucoes":     _safe_int(df_kpi, "qtd_devolucoes"),
             "clientes_ativos":    _safe_int(df_kpi, "clientes_ativos"),
             "ticket_medio":       _safe_float(df_kpi, "ticket_medio"),
             "pct_meta":           pct,
@@ -219,11 +229,13 @@ class BotVendas(BaseBot):
 
         df_kpi = db.query(f"""
             SELECT
-                SUM(v.ValVndTotal)        AS faturamento_total,
-                COUNT(DISTINCT v.NrDoc)   AS qtd_vendas,
-                AVG(v.ValVndTotal)        AS ticket_medio
-            FROM Blue.dbo.vmVndDoc v
-            INNER JOIN Blue.dbo.vwVndDoc d ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS venda_bruta,
+                SUM(CASE WHEN v.CustoRepTotal < 0  THEN v.ValVndTotal ELSE 0 END) AS devolucao,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END)   AS qtd_vendas,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal < 0  THEN v.NrDoc END)   AS qtd_devolucoes,
+                AVG(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal END)        AS ticket_medio
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
             WHERE d.Cancelado = '' AND d.Fat = 1
               AND {filtro_v}
               {filtro_plano_v}
@@ -303,9 +315,15 @@ class BotVendas(BaseBot):
         margem = sum(float(r.get("margem_bruta", 0) or 0)
                      for r in df_marca.to_dict("records"))
 
+        venda_bruta = _safe_float(df_kpi, "venda_bruta")
+        devolucao   = _safe_float(df_kpi, "devolucao")
         return {
-            "faturamento_total": _safe_float(df_kpi, "faturamento_total"),
+            "faturamento_total": venda_bruta + devolucao,
+            "venda_bruta":       venda_bruta,
+            "devolucao":         devolucao,
+            "venda_liquida":     venda_bruta + devolucao,
             "qtd_vendas":        _safe_int(df_kpi, "qtd_vendas"),
+            "qtd_devolucoes":    _safe_int(df_kpi, "qtd_devolucoes"),
             "ticket_medio":      _safe_float(df_kpi, "ticket_medio"),
             "margem_total":      margem,
             "total_devolucoes":  _safe_float(df_dev, "total_devolucoes"),
