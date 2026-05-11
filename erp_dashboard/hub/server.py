@@ -289,13 +289,15 @@ def run_hub(port: int | None = None):
 
     local_url = f"http://localhost:{_port}"
     net_url   = f"http://{local_ip}:{_port}"
+    app_url   = f"{local_url}/app"
 
     logger.info("ERP Hub iniciado → %s", net_url)
     print(f"\n{'=' * 52}")
     print(f"  ERP Dashboard rodando!")
-    print(f"  Local:  {local_url}")
-    print(f"  Rede:   {net_url}")
+    print(f"  Local:  {app_url}")
+    print(f"  Rede:   {net_url}/app")
+    print(f"  API:    {local_url}/docs")
     print(f"{'=' * 52}\n")
 
-    threading.Timer(1.5, lambda: webbrowser.open(local_url)).start()
+    threading.Timer(1.5, lambda: webbrowser.open(app_url)).start()
     uvicorn.run(app, host="0.0.0.0", port=_port, log_level="info")
