@@ -1,1 +1,9 @@
 cache.db
+
+# Web Dashboard build
+hub/static/
+hub/frontend/node_modules/
+hub/frontend/dist/
+
+# Reviewer artifacts
+__safe_test.py
