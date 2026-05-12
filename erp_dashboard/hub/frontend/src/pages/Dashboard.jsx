@@ -75,8 +75,12 @@ export default function Dashboard({ refreshTrigger }) {
     };
   }, [data, filtroVendedor, topVendedores]);
 
-  const vendedoresOpts = useMemo(() => getUniqueValues(topVendedores, 'Vendedor'), [topVendedores]);
-  const marcasOpts     = useMemo(() => getUniqueValues(marcasMes, 'DescrMarca'),   [marcasMes]);
+  const vendedoresOpts   = useMemo(() => getUniqueValues(topVendedores, 'Vendedor'), [topVendedores]);
+  const marcasOpts       = useMemo(() => getUniqueValues(marcasMes, 'DescrMarca'),   [marcasMes]);
+  const vendYAxisWidth   = useMemo(() => {
+    const longest = topVendedores.reduce((max, v) => Math.max(max, (v.Vendedor ?? '').length), 0);
+    return Math.min(160, Math.max(90, longest * 7));
+  }, [topVendedores]);
 
   const filterDefs = useMemo(() => [
     { key: 'Vendedor',   label: 'Vendedor', type: 'select', options: vendedoresOpts },
@@ -195,6 +199,7 @@ export default function Dashboard({ refreshTrigger }) {
             horizontal
             showLabels
             highlightKey={filtroVendedor}
+            yAxisWidth={vendYAxisWidth}
             height={200}
           />
         </div>

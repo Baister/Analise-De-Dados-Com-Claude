@@ -28,6 +28,7 @@ function Empty() {
 export default function BarChart({
   data, xKey, bars = [], horizontal = false, showLabels = false,
   stacked = false, colors = COLORS, height = 220, highlightKey = null,
+  yAxisWidth = 90,
 }) {
   if (!data?.length || !bars.length) return <Empty />;
 
@@ -44,7 +45,7 @@ export default function BarChart({
         {horizontal ? (
           <>
             <XAxis type="number" tick={TICK} tickFormatter={fmt} />
-            <YAxis type="category" dataKey={xKey} tick={TICK} width={90} />
+            <YAxis type="category" dataKey={xKey} tick={TICK} width={yAxisWidth} />
           </>
         ) : (
           <>
