@@ -45,7 +45,7 @@ export default function BarChart({
         {horizontal ? (
           <>
             <XAxis type="number" tick={TICK} tickFormatter={fmt} />
-            <YAxis type="category" dataKey={xKey} tick={TICK} width={yAxisWidth} />
+            <YAxis type="category" dataKey={xKey} tick={TICK} width={yAxisWidth} interval={0} />
           </>
         ) : (
           <>

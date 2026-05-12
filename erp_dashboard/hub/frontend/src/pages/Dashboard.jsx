@@ -83,6 +83,8 @@ export default function Dashboard({ refreshTrigger }) {
     return Math.min(160, Math.max(90, longest * 7));
   }, [topVendedores]);
 
+  const metaVal = meta ?? data?.meta_mensal ?? 0;
+
   const metaDiaria = useMemo(() => {
     if (!metaVal) return 0;
     const now = new Date();
@@ -109,7 +111,6 @@ export default function Dashboard({ refreshTrigger }) {
     DescrMarca: filtroMarca   ?? 'todos',
   }), [filtroVendedor, filtroMarca]);
 
-  const metaVal = meta ?? data?.meta_mensal ?? 0;
   const pctMeta = metaVal > 0 ? ((kpis.faturamento_atual ?? 0) / metaVal) * 100 : (data?.pct_meta ?? 0);
 
   function handleFilterChange(newFilters) {
