@@ -7,6 +7,7 @@ import BarChart from '../charts/BarChart';
 import PieChart from '../charts/PieChart';
 import { brl, pct, shortBrl } from '../utils/format';
 import { getUniqueValues, agregaPorDia } from '../utils/filters';
+import { countBusinessDaysSP } from '../utils/businessDays';
 
 function ProcessingScreen({ label }) {
   return (
@@ -81,6 +82,22 @@ export default function Dashboard({ refreshTrigger }) {
     const longest = topVendedores.reduce((max, v) => Math.max(max, (v.Vendedor ?? '').length), 0);
     return Math.min(160, Math.max(90, longest * 7));
   }, [topVendedores]);
+
+  const metaDiaria = useMemo(() => {
+    if (!metaVal) return 0;
+    const now = new Date();
+    return metaVal / countBusinessDaysSP(now.getFullYear(), now.getMonth() + 1);
+  }, [metaVal]);
+
+  const fatHoje = useMemo(() => {
+    const hoje = new Date().toISOString().slice(0, 10);
+    const entry = (data?.faturamento_diario ?? []).find(r => String(r.dia).slice(0, 10) === hoje);
+    return entry?.faturamento ?? 0;
+  }, [data]);
+
+  const pctMetaDiaria = useMemo(() =>
+    metaDiaria > 0 ? (fatHoje / metaDiaria) * 100 : 0,
+  [fatHoje, metaDiaria]);
 
   const filterDefs = useMemo(() => [
     { key: 'Vendedor',   label: 'Vendedor', type: 'select', options: vendedoresOpts },
@@ -174,6 +191,13 @@ export default function Dashboard({ refreshTrigger }) {
           value={pct(kpis.pct_margem ?? 0)}
           variant={(kpis.pct_margem ?? 0) >= 30 ? 'success' : (kpis.pct_margem ?? 0) >= 15 ? 'warning' : 'error'}
           sub={brl(kpis.margem_bruta ?? 0)}
+        />
+        <KpiCard
+          label="Meta do Dia"
+          value={pct(pctMetaDiaria)}
+          variant={pctMetaDiaria >= 100 ? 'success' : pctMetaDiaria >= 70 ? 'warning' : 'error'}
+          sub={metaDiaria > 0 ? `${brl(fatHoje)} de ${brl(metaDiaria)}` : 'Meta não configurada'}
+          subAbove
         />
       </div>
 
