@@ -36,7 +36,8 @@ class DatabaseManager:
                 time.sleep(delay)
             try:
                 self._conn = pyodbc.connect(self._build_conn_str(), autocommit=True)
-                self._conn.timeout = 60  # command timeout
+                self._conn.timeout = 45  # command timeout
+                self._conn.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
                 self._last_ping = time.time()
                 logger.info("Conectado ao SQL Server via DSN=%s", DB_CONFIG["dsn"])
                 return True
@@ -102,7 +103,8 @@ class DatabaseManager:
         """Execute query on a fresh independent connection — safe for parallel calls."""
         try:
             conn = pyodbc.connect(self._build_conn_str(), autocommit=True)
-            conn.timeout = 120
+            conn.timeout = 90
+            conn.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
             try:
                 cursor = conn.cursor()
                 cursor.execute(sql)

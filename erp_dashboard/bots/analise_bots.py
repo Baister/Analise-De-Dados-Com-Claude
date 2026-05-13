@@ -142,8 +142,12 @@ class BotDashboard(BaseBot):
                 v.CodVend,
                 SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END)
                     AS total_venda,
+                SUM(CASE WHEN v.CustoRepTotal <  0 THEN v.ValVndTotal ELSE 0 END)
+                    AS devolucao,
                 COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END)
                     AS qtd_pedidos,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal <  0 THEN v.NrDoc END)
+                    AS qtd_devolucoes,
                 SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END)
                     / NULLIF(COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END), 0)
                     AS ticket_medio,
@@ -179,18 +183,53 @@ class BotDashboard(BaseBot):
         df_marcas = db.query(f"""
             SELECT TOP 8
                 i.DescrMarca,
-                SUM(i.PrecoVndTotItem)                           AS faturamento,
-                SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem) AS margem_bruta,
-                SUM(i.QtdItem)                                   AS quantidade
+                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.PrecoVndTotItem ELSE 0 END) AS faturamento,
+                SUM(CASE WHEN i.CustoRepTotItem <  0 THEN i.PrecoVndTotItem ELSE 0 END) AS devolucao,
+                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.PrecoVndTotItem - i.CustoRepTotItem ELSE 0 END) AS margem_bruta,
+                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.QtdItem ELSE 0 END)         AS quantidade,
+                COUNT(DISTINCT CASE WHEN i.CustoRepTotItem >= 0 THEN i.NrDoc END)       AS qtd_documentos,
+                COUNT(DISTINCT CASE WHEN i.CustoRepTotItem <  0 THEN i.NrDoc END)       AS qtd_devolucoes
             FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
             WHERE i.DtVnd >= {_MES_INI}
               AND i.DtVnd <  {_MES_FIM}
               AND i.Fat = 1
               AND i.DescrMarca IS NOT NULL
-              AND i.CustoRepTotItem >= 0
             GROUP BY i.DescrMarca
             ORDER BY faturamento DESC
         """)
+
+        # Map CodVend → Vendedor using df_vend so names match top_vendedores exactly
+        _cod_vend_map: dict = {}
+        if not df_vend.empty and 'CodVend' in df_vend.columns:
+            _cod_vend_map = dict(zip(df_vend['CodVend'].astype(str), df_vend['Vendedor']))
+
+        if _cod_vend_map:
+            _in_codvend = ','.join(f"'{c}'" for c in _cod_vend_map)
+            _raw = db.new_conn_query(f"""
+                SELECT TOP 500
+                    i.CodVend,
+                    i.DescrMarca,
+                    SUM(i.PrecoVndTotItem) AS faturamento,
+                    SUM(i.QtdItem)         AS quantidade
+                FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+                WHERE i.DtVnd >= {_MES_INI}
+                  AND i.DtVnd <  {_MES_FIM}
+                  AND i.Fat = 1
+                  AND i.DescrMarca IS NOT NULL
+                  AND i.CustoRepTotItem >= 0
+                  AND i.CodVend IN ({_in_codvend})
+                GROUP BY i.CodVend, i.DescrMarca
+                ORDER BY i.CodVend, faturamento DESC
+            """)
+            if not _raw.empty:
+                _raw['Vendedor'] = _raw['CodVend'].astype(str).map(_cod_vend_map)
+                df_marcas_vend = _raw.dropna(subset=['Vendedor'])[
+                    ['Vendedor', 'DescrMarca', 'faturamento', 'quantidade']
+                ].copy()
+            else:
+                df_marcas_vend = pd.DataFrame()
+        else:
+            df_marcas_vend = pd.DataFrame()
 
         df_diario_vend = db.query(f"""
             SELECT
@@ -243,6 +282,7 @@ class BotDashboard(BaseBot):
             "top_vendedores":                  df_vend.to_dict("records"),
             "faturamento_diario":              df_diario.to_dict("records"),
             "marcas_mes":                      df_marcas.to_dict("records"),
+            "marcas_por_vendedor":             df_marcas_vend.to_dict("records"),
             "faturamento_diario_por_vendedor": df_diario_vend.to_dict("records"),
             "faturamento_diario_por_marca":    df_diario_marca.to_dict("records"),
             "ultimo_update":                   datetime.now().strftime("%H:%M:%S"),
@@ -405,7 +445,8 @@ class BotVendas(BaseBot):
                 SUM(CASE WHEN v.CustoRepTotal < 0  THEN v.ValVndTotal ELSE 0 END) AS devolucao,
                 COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END)   AS qtd_vendas,
                 COUNT(DISTINCT CASE WHEN v.CustoRepTotal < 0  THEN v.NrDoc END)   AS qtd_devolucoes,
-                AVG(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal END)        AS ticket_medio
+                AVG(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal END)        AS ticket_medio,
+                COUNT(DISTINCT v.CodCli)                                           AS clientes_ativos
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
             INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
             WHERE d.Cancelado = '' AND d.Fat = 1
@@ -489,19 +530,20 @@ class BotVendas(BaseBot):
 
         venda_bruta = _safe_float(df_kpi, "venda_bruta")
         devolucao   = _safe_float(df_kpi, "devolucao")
+        vend_records = df_vend.to_dict("records")
         return {
-            "faturamento_total": venda_bruta + devolucao,
-            "venda_bruta":       venda_bruta,
-            "devolucao":         devolucao,
-            "venda_liquida":     venda_bruta + devolucao,
-            "qtd_vendas":        _safe_int(df_kpi, "qtd_vendas"),
-            "qtd_devolucoes":    _safe_int(df_kpi, "qtd_devolucoes"),
-            "ticket_medio":      _safe_float(df_kpi, "ticket_medio"),
-            "margem_total":      margem,
-            "total_devolucoes":  _safe_float(df_dev, "total_devolucoes"),
-            "por_marca":         df_marca.to_dict("records"),
-            "por_grupo":         df_grupo.to_dict("records"),
-            "por_vendedor":      df_vend.to_dict("records"),
+            "faturamento_atual":     venda_bruta,
+            "qtd_documentos":        _safe_int(df_kpi, "qtd_vendas"),
+            "ticket_medio":          _safe_float(df_kpi, "ticket_medio"),
+            "clientes_ativos":       _safe_int(df_kpi, "clientes_ativos"),
+            "devolucao":             devolucao,
+            "qtd_devolucoes":        _safe_int(df_kpi, "qtd_devolucoes"),
+            "margem_total":          margem,
+            "top_vendedores":        vend_records,
+            "marcas_mes":            df_marca.to_dict("records"),
+            "ticket_medio_vendedor": vend_records,
+            "por_grupo":             df_grupo.to_dict("records"),
+            "ultimo_update":         datetime.now().strftime("%H:%M:%S"),
         }
 
     def analisar_filtrado(self, filtros: dict) -> dict:
@@ -525,7 +567,8 @@ class BotVendas(BaseBot):
                 SUM(CASE WHEN v.CustoRepTotal < 0  THEN v.ValVndTotal ELSE 0 END) AS devolucao,
                 COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END)   AS qtd_vendas,
                 COUNT(DISTINCT CASE WHEN v.CustoRepTotal < 0  THEN v.NrDoc END)   AS qtd_devolucoes,
-                AVG(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal END)        AS ticket_medio
+                AVG(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal END)        AS ticket_medio,
+                COUNT(DISTINCT v.CodCli)                                           AS clientes_ativos
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
             INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
             WHERE {where_v} {_EXCLUIR_PLANO}
@@ -569,20 +612,21 @@ class BotVendas(BaseBot):
         margem      = sum(float(r.get("margem_bruta", 0) or 0) for r in df_marca.to_dict("records"))
         venda_bruta = _safe_float(df_kpi, "venda_bruta")
         devolucao   = _safe_float(df_kpi, "devolucao")
+        vend_records = df_vend.to_dict("records")
 
         return {
-            "faturamento_total": venda_bruta + devolucao,
-            "venda_bruta":       venda_bruta,
-            "devolucao":         devolucao,
-            "venda_liquida":     venda_bruta + devolucao,
-            "qtd_vendas":        _safe_int(df_kpi, "qtd_vendas"),
-            "qtd_devolucoes":    _safe_int(df_kpi, "qtd_devolucoes"),
-            "ticket_medio":      _safe_float(df_kpi, "ticket_medio"),
-            "margem_total":      margem,
-            "total_devolucoes":  devolucao,
-            "por_marca":         df_marca.to_dict("records"),
-            "por_grupo":         [],
-            "por_vendedor":      df_vend.to_dict("records"),
+            "faturamento_atual":     venda_bruta,
+            "qtd_documentos":        _safe_int(df_kpi, "qtd_vendas"),
+            "ticket_medio":          _safe_float(df_kpi, "ticket_medio"),
+            "clientes_ativos":       _safe_int(df_kpi, "clientes_ativos"),
+            "devolucao":             devolucao,
+            "qtd_devolucoes":        _safe_int(df_kpi, "qtd_devolucoes"),
+            "margem_total":          margem,
+            "top_vendedores":        vend_records,
+            "marcas_mes":            df_marca.to_dict("records"),
+            "ticket_medio_vendedor": vend_records,
+            "por_grupo":             [],
+            "ultimo_update":         datetime.now().strftime("%H:%M:%S"),
         }
 
 

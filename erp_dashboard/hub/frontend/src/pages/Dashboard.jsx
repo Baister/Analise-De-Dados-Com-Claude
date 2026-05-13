@@ -54,10 +54,27 @@ export default function Dashboard({ refreshTrigger }) {
         const vb = vend.total_venda  ?? 0;
         return {
           faturamento_atual: vb,
-          qtd_documentos:    vend.qtd_pedidos ?? 0,
-          ticket_medio:      vend.ticket_medio ?? 0,
-          devolucao:         0,
-          qtd_devolucoes:    0,
+          qtd_documentos:    vend.qtd_pedidos    ?? 0,
+          ticket_medio:      vend.ticket_medio   ?? 0,
+          devolucao:         vend.devolucao      ?? 0,
+          qtd_devolucoes:    vend.qtd_devolucoes ?? 0,
+          margem_bruta:      mb,
+          pct_margem:        vb > 0 ? (mb / vb) * 100 : 0,
+        };
+      }
+    }
+    if (filtroMarca) {
+      const marca = marcasMes.find(m => m.DescrMarca === filtroMarca);
+      if (marca) {
+        const mb  = marca.margem_bruta   ?? 0;
+        const vb  = marca.faturamento    ?? 0;
+        const qtd = marca.qtd_documentos ?? 0;
+        return {
+          faturamento_atual: vb,
+          qtd_documentos:    qtd,
+          ticket_medio:      qtd > 0 ? vb / qtd : 0,
+          devolucao:         marca.devolucao      ?? 0,
+          qtd_devolucoes:    marca.qtd_devolucoes ?? 0,
           margem_bruta:      mb,
           pct_margem:        vb > 0 ? (mb / vb) * 100 : 0,
         };
@@ -74,14 +91,25 @@ export default function Dashboard({ refreshTrigger }) {
       margem_bruta:      mb,
       pct_margem:        vb > 0 ? (mb / vb) * 100 : 0,
     };
-  }, [data, filtroVendedor, topVendedores]);
+  }, [data, filtroVendedor, filtroMarca, topVendedores, marcasMes]);
 
   const vendedoresOpts   = useMemo(() => getUniqueValues(topVendedores, 'Vendedor'), [topVendedores]);
   const marcasOpts       = useMemo(() => getUniqueValues(marcasMes, 'DescrMarca'),   [marcasMes]);
+  const topVendedoresFiltrados = useMemo(() => {
+    if (filtroMarca && data?.marcas_por_vendedor?.length) {
+      return data.marcas_por_vendedor
+        .filter(m => m.DescrMarca === filtroMarca)
+        .sort((a, b) => b.faturamento - a.faturamento)
+        .slice(0, 10);
+    }
+    return topVendedores.slice(0, 10);
+  }, [data, filtroMarca, topVendedores]);
+
   const vendYAxisWidth   = useMemo(() => {
-    const longest = topVendedores.reduce((max, v) => Math.max(max, (v.Vendedor ?? '').length), 0);
+    const src = filtroMarca ? topVendedoresFiltrados : topVendedores;
+    const longest = src.reduce((max, v) => Math.max(max, (v.Vendedor ?? '').length), 0);
     return Math.min(160, Math.max(90, longest * 7));
-  }, [topVendedores]);
+  }, [filtroMarca, topVendedoresFiltrados, topVendedores]);
 
   const metaVal = meta ?? data?.meta_mensal ?? 0;
 
@@ -100,6 +128,15 @@ export default function Dashboard({ refreshTrigger }) {
   const pctMetaDiaria = useMemo(() =>
     metaDiaria > 0 ? (fatHoje / metaDiaria) * 100 : 0,
   [fatHoje, metaDiaria]);
+
+  const marcasFiltradas = useMemo(() => {
+    if (filtroVendedor && data?.marcas_por_vendedor?.length) {
+      return data.marcas_por_vendedor
+        .filter(m => m.Vendedor === filtroVendedor)
+        .slice(0, 8);
+    }
+    return marcasMes.slice(0, 8);
+  }, [data, filtroVendedor, marcasMes]);
 
   const filterDefs = useMemo(() => [
     { key: 'Vendedor',   label: 'Vendedor', type: 'select', options: vendedoresOpts },
@@ -218,9 +255,9 @@ export default function Dashboard({ refreshTrigger }) {
         <div className="bg-card border border-card_border rounded-lg p-4">
           <h2 className="text-sm font-semibold text-text_main mb-3">Top Vendedores</h2>
           <BarChart
-            data={topVendedores.slice(0, 10)}
+            data={topVendedoresFiltrados}
             xKey="Vendedor"
-            bars={[{ key: 'total_venda', label: 'Total', formatter: shortBrl }]}
+            bars={[{ key: (filtroMarca && data?.marcas_por_vendedor?.length) ? 'faturamento' : 'total_venda', label: 'Total', formatter: shortBrl }]}
             horizontal
             showLabels
             highlightKey={filtroVendedor}
@@ -234,22 +271,24 @@ export default function Dashboard({ refreshTrigger }) {
         <div className="bg-card border border-card_border rounded-lg p-4">
           <h2 className="text-sm font-semibold text-text_main mb-3">Faturamento por Marca</h2>
           <PieChart
-            data={marcasMes.slice(0, 8)}
+            data={marcasFiltradas}
             nameKey="DescrMarca"
             valueKey="faturamento"
             showValue
             formatter={shortBrl}
             height={220}
+            highlightKey={filtroMarca}
           />
         </div>
         <div className="bg-card border border-card_border rounded-lg p-4">
           <h2 className="text-sm font-semibold text-text_main mb-3">Itens Vendidos por Marca</h2>
           <PieChart
-            data={marcasMes.slice(0, 8)}
+            data={marcasFiltradas}
             nameKey="DescrMarca"
             valueKey="quantidade"
             showValue
             height={220}
+            highlightKey={filtroMarca}
           />
         </div>
       </div>

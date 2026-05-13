@@ -12,7 +12,7 @@ const TOOLTIP = {
 // showValue=true → legenda mostra "Nome · R$XXk"
 // formatter: função de formatação do valor (padrão: brl)
 export default function PieChart({
-  data, nameKey, valueKey, showValue = false, formatter, height = 200,
+  data, nameKey, valueKey, showValue = false, formatter, height = 200, highlightKey = null,
 }) {
   if (!data?.length) {
     return (
@@ -53,7 +53,13 @@ export default function PieChart({
           outerRadius={72}
           paddingAngle={2}
         >
-          {data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+          {data.map((entry, i) => (
+            <Cell
+              key={i}
+              fill={COLORS[i % COLORS.length]}
+              fillOpacity={highlightKey ? (entry[nameKey] === highlightKey ? 1 : 0.35) : 1}
+            />
+          ))}
         </Pie>
         <Tooltip {...TOOLTIP} formatter={v => [fmt(v)]} />
         <Legend
