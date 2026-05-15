@@ -9,11 +9,6 @@ import { brl, shortBrl, fmtDate } from '../utils/format';
 import { applyFilters, getUniqueValues } from '../utils/filters';
 import { classifyABC } from '../utils/estoque';
 
-const STATUS_COLS = [
-  { key: 'status',    label: 'Status' },
-  { key: 'quantidade', label: 'Qtd', render: v => String(v ?? 0) },
-];
-
 const CURVA_AB_COLS = [
   { key: 'CodItem',         label: 'Código' },
   { key: 'DescrItem',       label: 'Descrição' },

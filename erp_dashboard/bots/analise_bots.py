@@ -1232,6 +1232,8 @@ class BotEstoque(BaseBot):
             """, params)
             r["total_itens"]         = _safe_int(df_f,   "total_itens")
             r["valor_total_estoque"] = _safe_float(df_f, "valor_total_estoque")
+            # itens_zerados/itens_sem_giro ficam do analisar_rapido (não filtrados por marca)
+            # — recalculá-los exigiria DATEDIFF/DIAS_CRITICO por item, alto custo por chamada.
         return r
 
 

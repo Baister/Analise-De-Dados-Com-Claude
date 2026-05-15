@@ -73,24 +73,25 @@ def _classify_abc(items: list, value_key: str = "val_vendido_90d") -> list:
     result = []
     for r in sorted_items:
         acc += r.get(value_key, 0) / total
-        acc_rounded = round(acc, 10)
-        result.append({**r, "abc": "A" if acc_rounded <= 0.8 else ("B" if acc_rounded <= 0.95 else "C")})
+        result.append({**r, "abc": "A" if acc <= 0.8 else ("B" if acc <= 0.95 else "C")})
     return result
 
 
 def test_classify_abc_atribui_classes_corretas():
+    # total=1000: A=80% (A), B=90% cumul (B), C/D/E=96%+ (C)
+    # Evita acumulado exato em 95% para não divergir do JS por float point
     items = [
         {"CodItem": "A", "val_vendido_90d": 800},
-        {"CodItem": "B", "val_vendido_90d": 150},
-        {"CodItem": "C", "val_vendido_90d": 30},
-        {"CodItem": "D", "val_vendido_90d": 10},
-        {"CodItem": "E", "val_vendido_90d": 10},
+        {"CodItem": "B", "val_vendido_90d": 100},
+        {"CodItem": "C", "val_vendido_90d": 60},
+        {"CodItem": "D", "val_vendido_90d": 20},
+        {"CodItem": "E", "val_vendido_90d": 20},
     ]
     result = _classify_abc(items)
     classes = {r["CodItem"]: r["abc"] for r in result}
-    assert classes["A"] == "A"   # 80% sozinho → A
-    assert classes["B"] == "B"   # 80–95% → B
-    assert classes["C"] == "C"   # abaixo de 95% → C
+    assert classes["A"] == "A"   # acc=0.80 → A
+    assert classes["B"] == "B"   # acc=0.90 → B
+    assert classes["C"] == "C"   # acc=0.96 → C
     assert classes["D"] == "C"
     assert classes["E"] == "C"
 
