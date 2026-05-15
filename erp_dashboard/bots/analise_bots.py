@@ -542,7 +542,7 @@ class BotVendas(BaseBot):
             df_marcas_vend = pd.DataFrame()
 
         df_hoje = db.query(f"""
-            SELECT
+            SELECT TOP 50
                 v.Vendedor,
                 SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS venda_hoje
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
@@ -647,20 +647,29 @@ class BotVendas(BaseBot):
         devolucao   = _safe_float(df_kpi, "devolucao")
         vend_records = df_vend.to_dict("records")
 
+        hoje_parts: list = [
+            "d.Cancelado = ''",
+            "d.Fat = 1",
+            "v.DtVnd >= CAST(GETDATE() AS DATE)",
+            "v.DtVnd <  DATEADD(day, 1, CAST(GETDATE() AS DATE))",
+        ]
+        hoje_params: list = []
+        if filtros.get("vendedor"):
+            hoje_parts.append("v.Vendedor LIKE ?")
+            hoje_params.append(f"%{filtros['vendedor'][:100]}%")
+        where_hoje = " AND ".join(hoje_parts)
+
         df_hoje = db.query(f"""
-            SELECT
+            SELECT TOP 50
                 v.Vendedor,
                 SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS venda_hoje
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
             INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE d.Cancelado = ''
-              AND d.Fat = 1
-              AND v.DtVnd >= CAST(GETDATE() AS DATE)
-              AND v.DtVnd <  DATEADD(day, 1, CAST(GETDATE() AS DATE))
+            WHERE {where_hoje}
               {_EXCLUIR_PLANO}
             GROUP BY v.Vendedor
             ORDER BY venda_hoje DESC
-        """)
+        """, hoje_params if hoje_params else None)
 
         return {
             "faturamento_atual":     venda_bruta,
