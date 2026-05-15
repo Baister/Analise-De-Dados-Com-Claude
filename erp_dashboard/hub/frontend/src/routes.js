@@ -8,4 +8,5 @@ export const ROUTES = [
   { key: 'crm',        label: 'CRM',        icon: '👥', botKey: 'crm',        component: () => import('./pages/CRM')        },
   { key: 'cliente',               label: 'Cliente',  icon: '🧾', botKey: null, component: () => import('./pages/Cliente')               },
   { key: 'cliente_comportamento', label: 'Clientes', icon: '👥', botKey: null, component: () => import('./pages/ClienteComportamento') },
+  { key: 'configuracoes', label: 'Configurações', icon: '⚙️', botKey: null, component: () => import('./pages/Configuracoes') },
 ];
