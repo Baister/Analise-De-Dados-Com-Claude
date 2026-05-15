@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useMetas } from '../hooks/useMetas';
 import { useDados } from '../hooks/useApi';
 import { brl } from '../utils/format';
@@ -12,6 +12,10 @@ export default function Configuracoes() {
   const [totalInput, setTotalInput]   = useState('0');
   const [individuais, setIndividuais] = useState({});
   const [feedback, setFeedback]       = useState(null); // { tipo: 'success'|'error', msg }
+
+  const feedbackTimer = useRef(null);
+
+  useEffect(() => () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current); }, []);
 
   useEffect(() => {
     setTotalInput(String(metas.meta_mensal_total || 0));
@@ -42,7 +46,8 @@ export default function Configuracoes() {
     } else {
       setFeedback({ tipo: 'error', msg: res?.erro || 'Erro ao salvar' });
     }
-    setTimeout(() => setFeedback(null), 3000);
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    feedbackTimer.current = setTimeout(() => setFeedback(null), 3000);
   }
 
   if (metasLoading) {
@@ -76,7 +81,7 @@ export default function Configuracoes() {
             Distribuir igualmente
           </button>
         </div>
-        {vendedores.length > 0 && totalNum > 0 && (
+        {vendedores.length > 0 && (
           <p className="text-xs text-subtext">
             Média por vendedor:{' '}
             <span className="text-text_main font-medium">{brl(mediaVend)}</span>
