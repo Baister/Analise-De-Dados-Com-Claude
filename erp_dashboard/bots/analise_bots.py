@@ -968,35 +968,36 @@ class BotEstoque(BaseBot):
                 GROUP BY {_grp} ORDER BY saidas DESC
             """
 
-        sql_venda_estq = None
+        sql_giro_bruto = None
         if col_cod:
-            _vep = [f"e.{col_cod} AS CodItem"]
-            for _cx, _ax in [(col_dsc,"DescrItem"),(col_mrc,"DescrMarca"),
-                              (col_qtd,"QtdEstq"),  (col_vlr,"VlrEstq")]:
+            _gbp = [f"e.{col_cod} AS CodItem"]
+            for _cx, _ax in [(col_dsc, "DescrItem"), (col_mrc, "DescrMarca"),
+                             (col_qtd, "QtdEstq")]:
                 if _cx:
-                    _vep.append(f"e.{_cx} AS {_ax}")
-            _col_disp_ve = col_disp or col_qtd
-            _vep += [
-                f"ISNULL(e.{_col_disp_ve},0) AS QtdEstqDisp" if _col_disp_ve else "0 AS QtdEstqDisp",
-                "ISNULL(v.qtd_vendida_90d,0) AS qtd_vendida_90d",
-                "ISNULL(v.val_vendido_90d, 0) AS val_vendido_90d",
+                    _gbp.append(f"e.{_cx} AS {_ax}")
+            if col_dtv:
+                _gbp.append(f"e.{col_dtv} AS DtUltVnd")
+            _gbp += [
+                "ISNULL(v.qtd_vendida_90d, 0) AS qtd_vendida_90d",
+                "ISNULL(v.val_vendido_90d,  0) AS val_vendido_90d",
             ]
-            _where_ve = f"WHERE ISNULL(e.{col_disp},0)>=0" if col_disp else ""
-            sql_venda_estq = f"""
-                SELECT TOP 30 {", ".join(_vep)}
+            _where_gb = f"WHERE ISNULL(e.{col_qtd},0) > 0" if col_qtd else ""
+            sql_giro_bruto = f"""
+                SELECT TOP 500 {", ".join(_gbp)}
                 FROM {ev} e WITH (NOLOCK)
                 LEFT JOIN (
                     SELECT i.CodItem,
                            SUM(i.QtdItem)         AS qtd_vendida_90d,
                            SUM(i.PrecoVndTotItem) AS val_vendido_90d
                     FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
-                    INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
-                    WHERE d.Cancelado='' AND i.Fat=1
-                      AND i.DtVnd>=DATEADD(day,-90,GETDATE())
+                    INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK)
+                        ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+                    WHERE d.Cancelado = '' AND i.Fat = 1
+                      AND i.DtVnd >= DATEADD(day, -90, GETDATE())
                     GROUP BY i.CodItem
-                ) v ON e.{col_cod}=v.CodItem
-                {_where_ve}
-                ORDER BY ISNULL(v.qtd_vendida_90d,0) DESC
+                ) v ON e.{col_cod} = v.CodItem
+                {_where_gb}
+                ORDER BY ISNULL(v.qtd_vendida_90d, 0) ASC
             """
 
         sql_orc_estq = None
@@ -1079,7 +1080,7 @@ class BotEstoque(BaseBot):
             "criticos":       sql_criticos,
             "marca":          sql_marca,
             "mov":            sql_mov,
-            "venda_estq":     sql_venda_estq,
+            "giro_bruto":     sql_giro_bruto,
             "orc_estq":       sql_orc_estq,
             "venda_compra":   sql_venda_compra,
             "media_semanal":  sql_media_semanal,
@@ -1106,7 +1107,7 @@ class BotEstoque(BaseBot):
         df_criticos      = _res.get("criticos",      pd.DataFrame())
         df_marca         = _res.get("marca",         pd.DataFrame())
         df_mov           = _res.get("mov",           pd.DataFrame())
-        df_venda_estq    = _res.get("venda_estq",    pd.DataFrame())
+        df_giro_bruto    = _res.get("giro_bruto",    pd.DataFrame())
         df_orc_estq      = _res.get("orc_estq",      pd.DataFrame())
         df_venda_compra  = _res.get("venda_compra",  pd.DataFrame())
         df_media_semanal = _res.get("media_semanal", pd.DataFrame())
@@ -1116,16 +1117,27 @@ class BotEstoque(BaseBot):
         def _recs(df):
             return df.to_dict("records") if not df.empty else []
 
+        # Deriva zerados_lista de df_criticos — sem query adicional ao banco
+        _zer_keep2 = [c for c in ["CodItem", "DescrItem", "DescrMarca", "VlrEstq", "DtUltVnd"]
+                      if c in df_criticos.columns]
+        if not df_criticos.empty and "QtdEstqDisp" in df_criticos.columns:
+            _df_zer2 = df_criticos[df_criticos["QtdEstqDisp"].fillna(0) <= 0].copy()
+            if "DtUltVnd" in _df_zer2.columns:
+                _df_zer2 = _df_zer2.sort_values("DtUltVnd", na_position="last")
+            _zerados_lista2 = _df_zer2[_zer_keep2].to_dict("records") if not _df_zer2.empty else []
+        else:
+            _zerados_lista2 = []
+
         return {
             "total_itens":            _safe_int(df_resumo,  "total_itens"),
             "valor_total_estoque":    _safe_float(df_resumo,"valor_total_estoque"),
             "qtd_disponivel":         _safe_int(df_resumo,  "qtd_disponivel"),
             "itens_zerados":          _safe_int(df_resumo,  "itens_zerados"),
             "itens_sem_giro":         _safe_int(df_resumo,  "itens_sem_giro"),
-            "criticos":               _recs(df_criticos),
+            "zerados_lista":          _zerados_lista2,
+            "giro_bruto":             _recs(df_giro_bruto),
             "por_marca":              _recs(df_marca),
             "movimentacao":           df_mov.head(50).to_dict("records") if not df_mov.empty else [],
-            "venda_estoque":          _recs(df_venda_estq),
             "orc_estoque":            _recs(df_orc_estq),
             "venda_compra":           _recs(df_venda_compra),
             "media_semanal":          _recs(df_media_semanal),
