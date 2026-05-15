@@ -56,7 +56,9 @@
       "PowerShell(Get-Command node -ErrorAction SilentlyContinue)",
       "Bash(python -c \"import bots.analise_bots; print\\('OK'\\)\")",
       "Bash(timeout 15 grep -rn \"por_vendedor\\\\|faturamento_total\" --include=\"*.py\" --include=\"*.jsx\" --include=\"*.js\")",
-      "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;\" + $env:Path; cd \"c:\\\\Users\\\\Gustavo\\\\Downloads\\\\erp_dashboard\\\\AnaliseMetricaDesktop-ComClaud\\\\erp_dashboard\\\\hub\\\\frontend\"; npm run build 2>&1)"
+      "PowerShell($env:Path = \"C:\\\\Program Files\\\\nodejs;\" + $env:Path; cd \"c:\\\\Users\\\\Gustavo\\\\Downloads\\\\erp_dashboard\\\\AnaliseMetricaDesktop-ComClaud\\\\erp_dashboard\\\\hub\\\\frontend\"; npm run build 2>&1)",
+      "Bash(python -c \"import ast, pathlib; src = pathlib.Path\\('hub/server.py'\\).read_text\\(encoding='utf-8'\\); ast.parse\\(src\\); print\\('Syntax OK'\\)\")",
+      "Bash(python -c ' *)"
     ],
     "deny": [
       "Bash(rm *)",
