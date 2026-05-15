@@ -36,32 +36,53 @@ python main.py
 
 ```
 erp_dashboard/
-├── main.py                  ← Ponto de entrada
+├── main.py                  ← Ponto de entrada (app desktop)
 ├── requirements.txt
 ├── config/
-│   └── settings.py          ← IP, banco, intervalos, alertas
+│   ├── settings.py          ← IP, banco, intervalos, alertas (⚠️ credenciais reais)
+│   └── metas.json           ← Metas mensais por vendedor (gerado pela UI)
 ├── core/
-│   ├── database.py          ← Conexão única compartilhada (não sobrecarrega)
-│   └── exportador.py        ← Exportação Excel/CSV
+│   ├── database.py          ← Conexão única compartilhada (somente leitura)
+│   └── cache.py             ← Cache de resultados em disco
 ├── bots/
-│   └── analise_bots.py      ← 5 bots de análise automática
+│   └── analise_bots.py      ← 6 bots de análise automática
+├── hub/
+│   ├── server.py            ← FastAPI — API REST + SSE
+│   ├── run_hub.py           ← Entry point do hub web
+│   └── frontend/src/        ← React + Vite (buildar antes de testar)
 └── ui/
-    └── app.py               ← Interface gráfica (CustomTkinter)
+    └── app.py               ← Interface desktop (CustomTkinter) — modo legado
 ```
+
+**Hub web:** `python hub/run_hub.py` → abrir `http://localhost:8765/app`  
+**Após mudar qualquer arquivo `.jsx`/`.js`:** `cd hub/frontend && npm run build`
 
 ---
 
-## 🤖 Bots e intervalos padrão
+## 🤖 Bots e abas do hub web
 
-| Bot         | Intervalo | O que analisa |
-|-------------|-----------|---------------|
-| Vendas      | 5 min     | Total do dia/mês, pedidos, ticket médio, meta, histórico 7d |
-| Estoque     | 10 min    | Críticos, zerados, valor total, por categoria |
-| Financeiro  | 15 min    | A receber/pagar, inadimplência, top devedores |
-| Produção    | 10 min    | Ordens abertas, atrasadas, eficiência, por setor |
-| Clientes    | 30 min    | Total, ativos, novos 30d, top compradores 90d |
+| Bot / Aba | O que analisa |
+|-----------|---------------|
+| Dashboard | KPIs globais, top vendedores, faturamento diário, meta do dia, marcas |
+| Vendas | Faturamento por marca/grupo/vendedor, devoluções, **progresso de metas mensais e diárias** |
+| Estoque | Críticos, zerados, valor total, giro por marca |
+| Financeiro | A receber, inadimplência, tipos de recebimento |
+| CRM | Funil de orçamentos, conversão, clientes inativos |
+| Cliente | Histórico de compras por cliente |
+| **Configurações** | Definir meta mensal total e metas individuais por vendedor |
 
-Intervalos configuráveis em `config/settings.py → BOT_INTERVALS`.
+### Metas de Vendedores
+
+Na aba **Configurações**, o gestor pode:
+1. Definir a meta mensal total
+2. Clicar "Distribuir igualmente" para dividir entre todos os vendedores
+3. Ajustar individualmente e salvar
+
+Os dados são salvos em `config/metas.json` (sem escrita no banco).
+
+Na aba **Vendas**, uma seção de progresso colorida mostra:
+- **Mensal:** % atingida por vendedor no mês (verde ≥100%, amarelo ≥70%, vermelho <70%)
+- **Diário:** vendas de hoje vs. meta diária (meta_mensal ÷ dias úteis do mês)
 
 ---
 
