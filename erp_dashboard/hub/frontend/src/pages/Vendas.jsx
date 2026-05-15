@@ -1,11 +1,13 @@
 import { useState, useMemo } from 'react';
 import { useDados } from '../hooks/useApi';
+import { useMetas } from '../hooks/useMetas';
 import KpiCard from '../components/KpiCard';
 import FilterBar from '../components/FilterBar';
 import BarChart from '../charts/BarChart';
 import PieChart from '../charts/PieChart';
 import { brl, pct, shortBrl } from '../utils/format';
 import { getUniqueValues } from '../utils/filters';
+import { countBusinessDaysSP } from '../utils/businessDays';
 
 function SectionHeader({ title, subtitle }) {
   return (
@@ -16,6 +18,12 @@ function SectionHeader({ title, subtitle }) {
   );
 }
 
+function progressColor(pct) {
+  if (pct >= 100) return '#238636';
+  if (pct >= 70)  return '#d29922';
+  return '#da3633';
+}
+
 export default function Vendas({ refreshTrigger }) {
   const [filtroVendedor, setFiltroVendedor] = useState(null);
   const [filtroMarca, setFiltroMarca]       = useState(null);
@@ -24,6 +32,24 @@ export default function Vendas({ refreshTrigger }) {
 
   const topVendedores = useMemo(() => data?.top_vendedores ?? [], [data]);
   const marcasMes     = useMemo(() => data?.marcas_mes     ?? [], [data]);
+
+  /* ── Metas individuais ────────────────────────────────────────── */
+  const { metas } = useMetas();
+  const mIndividuais = metas?.metas_individuais ?? {};
+  const hasMetas = Object.keys(mIndividuais).length > 0;
+
+  const vendaHojeMap = useMemo(() => {
+    const arr = data?.venda_hoje_vendedor ?? [];
+    return Object.fromEntries(arr.map(r => [r.Vendedor, r.venda_hoje ?? 0]));
+  }, [data]);
+
+  const metaDiariaMap = useMemo(() => {
+    const now = new Date();
+    const dias = countBusinessDaysSP(now.getFullYear(), now.getMonth() + 1);
+    return Object.fromEntries(
+      Object.entries(mIndividuais).map(([v, meta]) => [v, meta / Math.max(dias, 1)])
+    );
+  }, [mIndividuais]);
 
   /* ── KPIs ─────────────────────────────────────────────────────── */
   const kpis = useMemo(() => {
@@ -317,6 +343,87 @@ export default function Vendas({ refreshTrigger }) {
           )}
         </div>
       </div>
+
+      {/* ── Progresso de Metas ────────────────────────────────────────── */}
+      {hasMetas && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+          {/* Mensal */}
+          <div className="bg-card border border-card_border rounded-xl p-4">
+            <SectionHeader
+              title="Progresso Mensal"
+              subtitle={`meta individual — ${new Date().toLocaleString('pt-BR', { month: 'long' })}`}
+            />
+            <div className="space-y-3">
+              {topVendedores
+                .filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0)
+                .map(v => {
+                  const meta = mIndividuais[v.Vendedor];
+                  const real = v.total_venda ?? 0;
+                  const pct  = Math.min((real / meta) * 100, 100);
+                  const cor  = progressColor(pct);
+                  return (
+                    <div key={v.Vendedor}>
+                      <div className="flex justify-between items-baseline mb-1">
+                        <span className="text-xs text-text_main truncate max-w-[55%]">{v.Vendedor}</span>
+                        <span className="text-xs font-bold" style={{ color: cor }}>
+                          {Math.round(pct)}% · {shortBrl(real)} / {shortBrl(meta)}
+                        </span>
+                      </div>
+                      <div className="h-2 bg-card_border rounded-full">
+                        <div
+                          className="h-2 rounded-full transition-all"
+                          style={{ width: `${pct}%`, background: cor }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              {topVendedores.filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0).length === 0 && (
+                <p className="text-xs text-subtext">Nenhum vendedor da lista tem meta configurada.</p>
+              )}
+            </div>
+          </div>
+
+          {/* Diário */}
+          <div className="bg-card border border-card_border rounded-xl p-4">
+            <SectionHeader
+              title="Progresso Diário"
+              subtitle="vendas de hoje vs meta do dia"
+            />
+            <div className="space-y-3">
+              {topVendedores
+                .filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0)
+                .map(v => {
+                  const metaD = metaDiariaMap[v.Vendedor] ?? 0;
+                  const hoje  = vendaHojeMap[v.Vendedor]  ?? 0;
+                  const pct   = metaD > 0 ? Math.min((hoje / metaD) * 100, 100) : 0;
+                  const cor   = progressColor(pct);
+                  return (
+                    <div key={v.Vendedor}>
+                      <div className="flex justify-between items-baseline mb-1">
+                        <span className="text-xs text-text_main truncate max-w-[45%]">{v.Vendedor}</span>
+                        <span className="text-xs font-bold" style={{ color: cor }}>
+                          {Math.round(pct)}% · {shortBrl(hoje)} hoje · meta {shortBrl(metaD)}
+                        </span>
+                      </div>
+                      <div className="h-2 bg-card_border rounded-full">
+                        <div
+                          className="h-2 rounded-full transition-all"
+                          style={{ width: `${pct}%`, background: cor }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              {topVendedores.filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0).length === 0 && (
+                <p className="text-xs text-subtext">Configure metas individuais na aba Configurações.</p>
+              )}
+            </div>
+          </div>
+
+        </div>
+      )}
 
     </div>
   );
