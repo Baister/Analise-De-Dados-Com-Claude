@@ -67,3 +67,18 @@ export function countBusinessDaysSP(year, month) {
   }
   return Math.max(1, count);
 }
+
+export function remainingBusinessDaysSP(year, month) {
+  const holidays = getHolidaysSP(year);
+  const todayStr = toStr(new Date());
+  const daysInMonth = new Date(year, month, 0).getDate();
+  let count = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dow = new Date(year, month - 1, d).getDay();
+    if (dow >= 1 && dow <= 5) {
+      const dateStr = `${year}-${pad2(month)}-${pad2(d)}`;
+      if (!holidays.has(dateStr) && dateStr >= todayStr) count++;
+    }
+  }
+  return Math.max(1, count);
+}

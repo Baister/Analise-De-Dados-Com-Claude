@@ -7,7 +7,7 @@ import BarChart from '../charts/BarChart';
 import PieChart from '../charts/PieChart';
 import { brl, pct, shortBrl } from '../utils/format';
 import { getUniqueValues } from '../utils/filters';
-import { countBusinessDaysSP } from '../utils/businessDays';
+import { countBusinessDaysSP, remainingBusinessDaysSP } from '../utils/businessDays';
 
 function SectionHeader({ title, subtitle }) {
   return (
@@ -43,13 +43,25 @@ export default function Vendas({ refreshTrigger }) {
     return Object.fromEntries(arr.map(r => [r.Vendedor, r.venda_hoje ?? 0]));
   }, [data]);
 
-  const metaDiariaMap = useMemo(() => {
+  const topVendedoresMap = useMemo(() =>
+    Object.fromEntries(topVendedores.map(v => [v.Vendedor, v])),
+    [topVendedores]
+  );
+
+  const diasRestantes = useMemo(() => {
     const now = new Date();
-    const dias = countBusinessDaysSP(now.getFullYear(), now.getMonth() + 1);
+    return remainingBusinessDaysSP(now.getFullYear(), now.getMonth() + 1);
+  }, []);
+
+  const metaDiariaMap = useMemo(() => {
     return Object.fromEntries(
-      Object.entries(mIndividuais).map(([v, meta]) => [v, meta / Math.max(dias, 1)])
+      Object.entries(mIndividuais).map(([v, meta]) => {
+        const realizado = topVendedoresMap[v]?.total_venda ?? 0;
+        const restante  = Math.max(meta - realizado, 0);
+        return [v, restante / Math.max(diasRestantes, 1)];
+      })
     );
-  }, [mIndividuais]);
+  }, [mIndividuais, topVendedoresMap, diasRestantes]);
 
   /* ── KPIs ─────────────────────────────────────────────────────── */
   const kpis = useMemo(() => {
@@ -389,22 +401,27 @@ export default function Vendas({ refreshTrigger }) {
           <div className="bg-card border border-card_border rounded-xl p-4">
             <SectionHeader
               title="Progresso Diário"
-              subtitle="vendas de hoje vs meta do dia"
+              subtitle={`meta ajustada pelo restante · ${diasRestantes} dia${diasRestantes !== 1 ? 's' : ''} útil${diasRestantes !== 1 ? 'eis' : ''} restante${diasRestantes !== 1 ? 's' : ''}`}
             />
             <div className="space-y-3">
               {topVendedores
                 .filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0 && vendaHojeMap[v.Vendedor] !== undefined)
                 .map(v => {
-                  const metaD  = metaDiariaMap[v.Vendedor] ?? 0;
-                  const hoje   = vendaHojeMap[v.Vendedor]  ?? 0;
-                  const pctVal = metaD > 0 ? Math.min((hoje / metaD) * 100, 100) : 0;
-                  const cor    = progressColor(pctVal);
+                  const metaM    = mIndividuais[v.Vendedor];
+                  const real     = v.total_venda ?? 0;
+                  const exceeded = real >= metaM;
+                  const metaD    = metaDiariaMap[v.Vendedor] ?? 0;
+                  const hoje     = vendaHojeMap[v.Vendedor]  ?? 0;
+                  const pctVal   = exceeded ? 100 : (metaD > 0 ? Math.min((hoje / metaD) * 100, 100) : 0);
+                  const cor      = progressColor(pctVal);
                   return (
                     <div key={v.Vendedor}>
                       <div className="flex justify-between items-baseline mb-1">
                         <span className="text-xs text-text_main truncate max-w-[45%]">{v.Vendedor}</span>
                         <span className="text-xs font-bold" style={{ color: cor }}>
-                          {Math.round(pctVal)}% · {shortBrl(hoje)} hoje · meta {shortBrl(metaD)}
+                          {exceeded
+                            ? `meta atingida · ${shortBrl(hoje)} hoje`
+                            : `${Math.round(pctVal)}% · ${shortBrl(hoje)} hoje · meta ${shortBrl(metaD)}`}
                         </span>
                       </div>
                       <div className="h-2 bg-card_border rounded-full">
