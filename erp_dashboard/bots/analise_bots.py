@@ -1149,7 +1149,10 @@ class BotEstoque(BaseBot):
     def analisar_filtrado(self, filtros: dict) -> dict:
         self._load_schemas()
         ev, et  = self._best("item", "vnd")
-        col_mrc = self._c(et, "DescrMarca", "Marca", "DescrMarcaItem", "NomeMarca",
+        col_cod = self._c(et, "CodItem",   "Codigo",    "CodigoItem",  "CodProduto")
+        col_dsc = self._c(et, "DescrItem", "Descricao", "NomeItem",    "DescrProduto",
+                              "NomeProduto", "DescrProd")
+        col_mrc = self._c(et, "DescrMarca", "Marca",    "DescrMarcaItem", "NomeMarca",
                               "DescrMarcaProd", "MarcaItem")
         col_dtv = (self._c(et, "DtUltVnd", "DtUltimaVenda", "DtVnd", "UltDtVnd",
                                "DtUltVenda", "DataUltVnd", "DataUltimaVenda", "DtUltimaVnd")
@@ -1160,19 +1163,63 @@ class BotEstoque(BaseBot):
         col_qtd = self._c(et, "QtdEstq", "SaldoEstq", "QtdSaldo", "Qtd",
                               "QtdEstoque", "QtdTotEstq", "QtdTotalEstq")
 
+        # Apenas filtro de Marca (dt_de/dt_ate removidos — eram só para criticos)
         parts:  list = ["1=1"]
         params: list = []
         if filtros.get("marca") and col_mrc:
             parts.append(f"e.{col_mrc} LIKE ?")
             params.append(f"%{filtros['marca'][:100]}%")
-        if filtros.get("dt_de") and _valid_date(filtros["dt_de"]) and col_dtv:
-            parts.append(f"e.{col_dtv} >= ?")
-            params.append(filtros["dt_de"])
-        if filtros.get("dt_ate") and _valid_date(filtros["dt_ate"]) and col_dtv:
-            parts.append(f"e.{col_dtv} <= ?")
-            params.append(filtros["dt_ate"])
 
         r = self.analisar_rapido()
+
+        # Filtra zerados_lista por Marca (Python, sem SQL extra)
+        if filtros.get("marca"):
+            m = filtros["marca"].lower()
+            r["zerados_lista"] = [
+                z for z in r.get("zerados_lista", [])
+                if m in str(z.get("DescrMarca", "")).lower()
+            ]
+
+        # giro_bruto com filtro de Marca aplicado
+        if col_cod:
+            _gbp = [f"e.{col_cod} AS CodItem"]
+            if col_dsc: _gbp.append(f"e.{col_dsc} AS DescrItem")
+            if col_mrc: _gbp.append(f"e.{col_mrc} AS DescrMarca")
+            if col_qtd: _gbp.append(f"ISNULL(e.{col_qtd},0) AS QtdEstq")
+            if col_dtv: _gbp.append(f"e.{col_dtv} AS DtUltVnd")
+            _gbp += [
+                "ISNULL(v.qtd_vendida_90d, 0) AS qtd_vendida_90d",
+                "ISNULL(v.val_vendido_90d,  0) AS val_vendido_90d",
+            ]
+            gb_parts = ["1=1"]
+            gb_params: list = []
+            if col_qtd:
+                gb_parts.append(f"ISNULL(e.{col_qtd},0) > 0")
+            if filtros.get("marca") and col_mrc:
+                gb_parts.append(f"e.{col_mrc} LIKE ?")
+                gb_params.append(f"%{filtros['marca'][:100]}%")
+            sql_gb = f"""
+                SELECT TOP 500 {", ".join(_gbp)}
+                FROM {ev} e WITH (NOLOCK)
+                LEFT JOIN (
+                    SELECT i.CodItem,
+                           SUM(i.QtdItem)         AS qtd_vendida_90d,
+                           SUM(i.PrecoVndTotItem) AS val_vendido_90d
+                    FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+                    INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK)
+                        ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+                    WHERE d.Cancelado = '' AND i.Fat = 1
+                      AND i.DtVnd >= DATEADD(day, -90, GETDATE())
+                    GROUP BY i.CodItem
+                ) v ON e.{col_cod} = v.CodItem
+                WHERE {" AND ".join(gb_parts)}
+                ORDER BY ISNULL(v.qtd_vendida_90d, 0) ASC
+            """
+            df_gb = db.query(sql_gb, gb_params if gb_params else None)
+            r["giro_bruto"] = df_gb.to_dict("records") if not df_gb.empty else []
+        else:
+            r["giro_bruto"] = []
+
         if params:
             def _sum(col, alias):
                 return f"SUM(ISNULL({col},0)) AS {alias}" if col else f"0 AS {alias}"
