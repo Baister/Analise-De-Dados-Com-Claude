@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 _loop: asyncio.AbstractEventLoop | None = None
 _sse_queues: list[asyncio.Queue] = []
 _manager = None  # BotManager — definido por run_hub()
+_METAS_PATH = pathlib.Path(__file__).parent.parent / "config" / "metas.json"
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────
@@ -90,6 +91,11 @@ class AuthRequest(BaseModel):
     password: str
 
 
+class MetasPayload(BaseModel):
+    meta_mensal_total: float
+    metas_individuais: dict[str, float]
+
+
 @app.post("/auth")
 def login(req: AuthRequest):
     if req.password != DASHBOARD_PASSWORD:
@@ -109,6 +115,38 @@ def root():
 @app.get("/config")
 def config_route(_: str = Depends(verify_token)):
     return {"meta_faturamento_mensal": ALERTAS.get("meta_faturamento_mensal", 400000)}
+
+
+@app.get("/metas")
+def get_metas(_: str = Depends(verify_token)):
+    if not _METAS_PATH.exists():
+        return {"meta_mensal_total": 0.0, "metas_individuais": {}, "ultima_atualizacao": None}
+    try:
+        return json.loads(_METAS_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.error("get_metas erro: %s", e)
+        return {"meta_mensal_total": 0.0, "metas_individuais": {}, "ultima_atualizacao": None}
+
+
+@app.post("/metas")
+def post_metas(payload: MetasPayload, _: str = Depends(verify_token)):
+    if payload.meta_mensal_total < 0:
+        raise HTTPException(status_code=422, detail="meta_mensal_total deve ser >= 0")
+    if any(v < 0 for v in payload.metas_individuais.values()):
+        raise HTTPException(status_code=422, detail="Valores individuais devem ser >= 0")
+    from datetime import datetime as _dt
+    data = {
+        "meta_mensal_total": payload.meta_mensal_total,
+        "metas_individuais": payload.metas_individuais,
+        "ultima_atualizacao": _dt.now().isoformat(timespec="seconds"),
+    }
+    try:
+        _METAS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _METAS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"ok": True}
+    except Exception as e:
+        logger.error("post_metas erro: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── SSE — broadcast chamado de threads dos bots ───────────────────────
