@@ -830,13 +830,24 @@ class BotEstoque(BaseBot):
         def _recs(df):
             return df.to_dict("records") if not df.empty else []
 
+        # Deriva zerados_lista de df_criticos — sem query adicional ao banco
+        _zer_keep = [c for c in ["CodItem", "DescrItem", "DescrMarca", "VlrEstq", "DtUltVnd"]
+                     if c in df_criticos.columns]
+        if not df_criticos.empty and "QtdEstqDisp" in df_criticos.columns:
+            _df_zer = df_criticos[df_criticos["QtdEstqDisp"].fillna(0) <= 0].copy()
+            if "DtUltVnd" in _df_zer.columns:
+                _df_zer = _df_zer.sort_values("DtUltVnd", na_position="last")
+            _zerados_lista = _df_zer[_zer_keep].to_dict("records") if not _df_zer.empty else []
+        else:
+            _zerados_lista = []
+
         return {
             "total_itens":         _safe_int(df_resumo,  "total_itens"),
             "valor_total_estoque": _safe_float(df_resumo, "valor_total_estoque"),
             "qtd_disponivel":      _safe_int(df_resumo,  "qtd_disponivel"),
             "itens_zerados":       _safe_int(df_resumo,  "itens_zerados"),
             "itens_sem_giro":      _safe_int(df_resumo,  "itens_sem_giro"),
-            "criticos":            _recs(df_criticos),
+            "zerados_lista":       _zerados_lista,
             "por_marca":           _recs(df_marca),
             "ultimo_update":       datetime.now().strftime("%H:%M:%S"),
         }
