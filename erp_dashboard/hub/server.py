@@ -7,6 +7,7 @@ import re as _re
 import secrets
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -122,7 +123,11 @@ def get_metas(_: str = Depends(verify_token)):
     if not _METAS_PATH.exists():
         return {"meta_mensal_total": 0.0, "metas_individuais": {}, "ultima_atualizacao": None}
     try:
-        return json.loads(_METAS_PATH.read_text(encoding="utf-8"))
+        data = json.loads(_METAS_PATH.read_text(encoding="utf-8"))
+        data.setdefault("meta_mensal_total", 0)
+        data.setdefault("metas_individuais", {})
+        data.setdefault("ultima_atualizacao", None)
+        return data
     except Exception as e:
         logger.error("get_metas erro: %s", e)
         return {"meta_mensal_total": 0.0, "metas_individuais": {}, "ultima_atualizacao": None}
@@ -134,19 +139,20 @@ def post_metas(payload: MetasPayload, _: str = Depends(verify_token)):
         raise HTTPException(status_code=422, detail="meta_mensal_total deve ser >= 0")
     if any(v < 0 for v in payload.metas_individuais.values()):
         raise HTTPException(status_code=422, detail="Valores individuais devem ser >= 0")
-    from datetime import datetime as _dt
     data = {
         "meta_mensal_total": payload.meta_mensal_total,
         "metas_individuais": payload.metas_individuais,
-        "ultima_atualizacao": _dt.now().isoformat(timespec="seconds"),
+        "ultima_atualizacao": datetime.now().isoformat(timespec="seconds"),
     }
     try:
         _METAS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _METAS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _tmp = _METAS_PATH.with_suffix(".tmp")
+        _tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        _tmp.replace(_METAS_PATH)
         return {"ok": True}
     except Exception as e:
-        logger.error("post_metas erro: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("[metas] Erro ao salvar: %s", e)
+        raise HTTPException(status_code=500, detail="Erro ao salvar metas")
 
 
 # ── SSE — broadcast chamado de threads dos bots ───────────────────────
