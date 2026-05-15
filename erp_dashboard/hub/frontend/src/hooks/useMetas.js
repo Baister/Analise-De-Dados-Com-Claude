@@ -30,7 +30,7 @@ export function useMetas() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      if (res?.ok) setMetas({ ...payload, ultima_atualizacao: new Date().toISOString() });
+      if (res?.ok === true) setMetas({ ...payload, ultima_atualizacao: new Date().toISOString() });
       return res ?? { ok: false, erro: 'Sem resposta' };
     } catch (e) {
       return { ok: false, erro: e.message };
