@@ -358,22 +358,22 @@ export default function Vendas({ refreshTrigger }) {
               {topVendedores
                 .filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0)
                 .map(v => {
-                  const meta = mIndividuais[v.Vendedor];
-                  const real = v.total_venda ?? 0;
-                  const pct  = Math.min((real / meta) * 100, 100);
-                  const cor  = progressColor(pct);
+                  const meta   = mIndividuais[v.Vendedor];
+                  const real   = v.total_venda ?? 0;
+                  const pctVal = Math.min((real / meta) * 100, 100);
+                  const cor    = progressColor(pctVal);
                   return (
                     <div key={v.Vendedor}>
                       <div className="flex justify-between items-baseline mb-1">
                         <span className="text-xs text-text_main truncate max-w-[55%]">{v.Vendedor}</span>
                         <span className="text-xs font-bold" style={{ color: cor }}>
-                          {Math.round(pct)}% · {shortBrl(real)} / {shortBrl(meta)}
+                          {Math.round(pctVal)}% · {shortBrl(real)} / {shortBrl(meta)}
                         </span>
                       </div>
                       <div className="h-2 bg-card_border rounded-full">
                         <div
                           className="h-2 rounded-full transition-all"
-                          style={{ width: `${pct}%`, background: cor }}
+                          style={{ width: `${pctVal}%`, background: cor }}
                         />
                       </div>
                     </div>
@@ -393,30 +393,30 @@ export default function Vendas({ refreshTrigger }) {
             />
             <div className="space-y-3">
               {topVendedores
-                .filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0)
+                .filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0 && vendaHojeMap[v.Vendedor] !== undefined)
                 .map(v => {
-                  const metaD = metaDiariaMap[v.Vendedor] ?? 0;
-                  const hoje  = vendaHojeMap[v.Vendedor]  ?? 0;
-                  const pct   = metaD > 0 ? Math.min((hoje / metaD) * 100, 100) : 0;
-                  const cor   = progressColor(pct);
+                  const metaD  = metaDiariaMap[v.Vendedor] ?? 0;
+                  const hoje   = vendaHojeMap[v.Vendedor]  ?? 0;
+                  const pctVal = metaD > 0 ? Math.min((hoje / metaD) * 100, 100) : 0;
+                  const cor    = progressColor(pctVal);
                   return (
                     <div key={v.Vendedor}>
                       <div className="flex justify-between items-baseline mb-1">
                         <span className="text-xs text-text_main truncate max-w-[45%]">{v.Vendedor}</span>
                         <span className="text-xs font-bold" style={{ color: cor }}>
-                          {Math.round(pct)}% · {shortBrl(hoje)} hoje · meta {shortBrl(metaD)}
+                          {Math.round(pctVal)}% · {shortBrl(hoje)} hoje · meta {shortBrl(metaD)}
                         </span>
                       </div>
                       <div className="h-2 bg-card_border rounded-full">
                         <div
                           className="h-2 rounded-full transition-all"
-                          style={{ width: `${pct}%`, background: cor }}
+                          style={{ width: `${pctVal}%`, background: cor }}
                         />
                       </div>
                     </div>
                   );
                 })}
-              {topVendedores.filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0).length === 0 && (
+              {topVendedores.filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0 && vendaHojeMap[v.Vendedor] !== undefined).length === 0 && (
                 <p className="text-xs text-subtext">Configure metas individuais na aba Configurações.</p>
               )}
             </div>
