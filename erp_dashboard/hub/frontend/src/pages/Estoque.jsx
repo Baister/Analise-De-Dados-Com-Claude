@@ -140,7 +140,7 @@ export default function Estoque({ refreshTrigger }) {
     );
   }
 
-  const loadingABC = giroBruto.length === 0;
+  const loadingABC = !data || !('giro_bruto' in data);
 
   return (
     <div className="p-6 space-y-6">
