@@ -5,8 +5,9 @@ import { brl } from '../utils/format';
 
 const COLORS  = ['#1f6feb', '#238636', '#d29922', '#da3633', '#8b949e', '#a371f7'];
 const TOOLTIP = {
-  contentStyle: { background: '#1c2128', border: '1px solid #30363d', borderRadius: 6, fontSize: 12 },
+  contentStyle: { background: '#1c2128', border: '1px solid #30363d', borderRadius: 6, fontSize: 12, color: '#e6edf3' },
   labelStyle:   { color: '#e6edf3' },
+  itemStyle:    { color: '#e6edf3' },
 };
 
 // showValue=true → legenda mostra "Nome · R$XXk"

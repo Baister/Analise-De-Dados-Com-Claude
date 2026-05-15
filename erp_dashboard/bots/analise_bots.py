@@ -457,18 +457,20 @@ class BotVendas(BaseBot):
 
         df_marca = db.query(f"""
             SELECT TOP 20
-                i.CodMarca,
                 i.DescrMarca,
-                SUM(i.PrecoVndTotItem)                           AS faturamento,
-                SUM(i.QtdItem)                                   AS quantidade,
-                SUM(i.CustoRepTotItem)                           AS custo_total,
-                SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem)  AS margem_bruta
-            FROM Blue.dbo.vmVndItemDoc i
-            INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.PrecoVndTotItem ELSE 0 END) AS faturamento,
+                SUM(CASE WHEN i.CustoRepTotItem <  0 THEN i.PrecoVndTotItem ELSE 0 END) AS devolucao,
+                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.PrecoVndTotItem - i.CustoRepTotItem ELSE 0 END) AS margem_bruta,
+                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.QtdItem ELSE 0 END)         AS quantidade,
+                COUNT(DISTINCT CASE WHEN i.CustoRepTotItem >= 0 THEN i.NrDoc END)       AS qtd_documentos,
+                COUNT(DISTINCT CASE WHEN i.CustoRepTotItem <  0 THEN i.NrDoc END)       AS qtd_devolucoes
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
             WHERE d.Cancelado = '' AND i.Fat = 1
               AND {filtro_data}
               {filtro_plano_i}
-            GROUP BY i.CodMarca, i.DescrMarca
+              AND i.DescrMarca IS NOT NULL
+            GROUP BY i.DescrMarca
             ORDER BY faturamento DESC
         """)
 
@@ -478,8 +480,8 @@ class BotVendas(BaseBot):
                 i.DescrGrpItem,
                 SUM(i.PrecoVndTotItem) AS faturamento,
                 SUM(i.QtdItem)         AS quantidade
-            FROM Blue.dbo.vmVndItemDoc i
-            INNER JOIN Blue.dbo.vwVndDoc d ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
             WHERE d.Cancelado = '' AND i.Fat = 1
               AND {filtro_data}
               {filtro_plano_i}
@@ -487,43 +489,57 @@ class BotVendas(BaseBot):
             ORDER BY faturamento DESC
         """)
 
-        df_dev = db.query(f"""
-            SELECT SUM(dev.ValTotItem) AS total_devolucoes
-            FROM Blue.dbo.vmMetricasMotivoDevItem dev
-            WHERE {filtro_d}
-        """)
-
         df_vend = db.query(f"""
             SELECT TOP 10
                 v.Vendedor,
                 v.CodVend,
-                SUM(v.ValVndTotal)      AS total_venda,
-                COUNT(DISTINCT v.NrDoc) AS qtd_pedidos,
-                AVG(v.ValVndTotal)      AS ticket_medio,
-                SUM(v.CustoRepTotal)    AS custo_total
-            FROM Blue.dbo.vmVndDoc v
-            INNER JOIN Blue.dbo.vwVndDoc d ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS total_venda,
+                SUM(CASE WHEN v.CustoRepTotal <  0 THEN v.ValVndTotal ELSE 0 END) AS devolucao,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END)   AS qtd_pedidos,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal <  0 THEN v.NrDoc END)   AS qtd_devolucoes,
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END)
+                    / NULLIF(COUNT(DISTINCT CASE WHEN v.CustoRepTotal >= 0 THEN v.NrDoc END), 0) AS ticket_medio,
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal - v.CustoRepTotal ELSE 0 END) AS margem_bruta
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
             WHERE d.Cancelado = '' AND d.Fat = 1
               AND {filtro_v}
               {filtro_plano_v}
+              {_EXCLUIR_PLANO}
             GROUP BY v.Vendedor, v.CodVend
             ORDER BY total_venda DESC
         """)
 
-        df_dev_vend = db.query(f"""
-            SELECT
-                v.CodVend,
-                COUNT(DISTINCT dev.NrDoc) AS qtd_devolucoes
-            FROM Blue.dbo.vmMetricasMotivoDevItem dev
-            INNER JOIN Blue.dbo.vmVndDoc v ON dev.NrDoc = v.NrDoc
-            WHERE {filtro_d}
-            GROUP BY v.CodVend
-        """)
-        if not df_dev_vend.empty and not df_vend.empty:
-            dev_dict = df_dev_vend.set_index("CodVend")["qtd_devolucoes"].to_dict()
-            df_vend["qtd_devolucoes"] = df_vend["CodVend"].map(dev_dict).fillna(0).astype(int)
-        elif not df_vend.empty:
-            df_vend["qtd_devolucoes"] = 0
+        # marcas por vendedor — mesmo approach do BotDashboard (garante paridade de nomes)
+        _cod_vend_map_v: dict = {}
+        if not df_vend.empty and 'CodVend' in df_vend.columns:
+            _cod_vend_map_v = dict(zip(df_vend['CodVend'].astype(str), df_vend['Vendedor']))
+        if _cod_vend_map_v:
+            _in_cv = ','.join(f"'{c}'" for c in _cod_vend_map_v)
+            _raw_mv = db.new_conn_query(f"""
+                SELECT TOP 500
+                    i.CodVend,
+                    i.DescrMarca,
+                    SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.PrecoVndTotItem ELSE 0 END) AS faturamento,
+                    SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.QtdItem ELSE 0 END)         AS quantidade
+                FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+                WHERE i.DtVnd >= {_MES_INI}
+                  AND i.DtVnd <  {_MES_FIM}
+                  AND i.Fat = 1
+                  AND i.DescrMarca IS NOT NULL
+                  AND i.CodVend IN ({_in_cv})
+                GROUP BY i.CodVend, i.DescrMarca
+                ORDER BY i.CodVend, faturamento DESC
+            """)
+            if not _raw_mv.empty:
+                _raw_mv['Vendedor'] = _raw_mv['CodVend'].astype(str).map(_cod_vend_map_v)
+                df_marcas_vend = _raw_mv.dropna(subset=['Vendedor'])[
+                    ['Vendedor', 'DescrMarca', 'faturamento', 'quantidade']
+                ].copy()
+            else:
+                df_marcas_vend = pd.DataFrame()
+        else:
+            df_marcas_vend = pd.DataFrame()
 
         margem = sum(float(r.get("margem_bruta", 0) or 0)
                      for r in df_marca.to_dict("records"))
@@ -542,6 +558,7 @@ class BotVendas(BaseBot):
             "top_vendedores":        vend_records,
             "marcas_mes":            df_marca.to_dict("records"),
             "ticket_medio_vendedor": vend_records,
+            "marcas_por_vendedor":   df_marcas_vend.to_dict("records"),
             "por_grupo":             df_grupo.to_dict("records"),
             "ultimo_update":         datetime.now().strftime("%H:%M:%S"),
         }
