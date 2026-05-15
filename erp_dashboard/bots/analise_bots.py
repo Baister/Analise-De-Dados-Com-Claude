@@ -541,6 +541,21 @@ class BotVendas(BaseBot):
         else:
             df_marcas_vend = pd.DataFrame()
 
+        df_hoje = db.query(f"""
+            SELECT
+                v.Vendedor,
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS venda_hoje
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE d.Cancelado = ''
+              AND d.Fat = 1
+              AND v.DtVnd >= CAST(GETDATE() AS DATE)
+              AND v.DtVnd <  DATEADD(day, 1, CAST(GETDATE() AS DATE))
+              {_EXCLUIR_PLANO}
+            GROUP BY v.Vendedor
+            ORDER BY venda_hoje DESC
+        """)
+
         margem = sum(float(r.get("margem_bruta", 0) or 0)
                      for r in df_marca.to_dict("records"))
 
@@ -560,6 +575,7 @@ class BotVendas(BaseBot):
             "ticket_medio_vendedor": vend_records,
             "marcas_por_vendedor":   df_marcas_vend.to_dict("records"),
             "por_grupo":             df_grupo.to_dict("records"),
+            "venda_hoje_vendedor":   df_hoje.to_dict("records"),
             "ultimo_update":         datetime.now().strftime("%H:%M:%S"),
         }
 
@@ -631,6 +647,21 @@ class BotVendas(BaseBot):
         devolucao   = _safe_float(df_kpi, "devolucao")
         vend_records = df_vend.to_dict("records")
 
+        df_hoje = db.query(f"""
+            SELECT
+                v.Vendedor,
+                SUM(CASE WHEN v.CustoRepTotal >= 0 THEN v.ValVndTotal ELSE 0 END) AS venda_hoje
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE d.Cancelado = ''
+              AND d.Fat = 1
+              AND v.DtVnd >= CAST(GETDATE() AS DATE)
+              AND v.DtVnd <  DATEADD(day, 1, CAST(GETDATE() AS DATE))
+              {_EXCLUIR_PLANO}
+            GROUP BY v.Vendedor
+            ORDER BY venda_hoje DESC
+        """)
+
         return {
             "faturamento_atual":     venda_bruta,
             "qtd_documentos":        _safe_int(df_kpi, "qtd_vendas"),
@@ -643,6 +674,7 @@ class BotVendas(BaseBot):
             "marcas_mes":            df_marca.to_dict("records"),
             "ticket_medio_vendedor": vend_records,
             "por_grupo":             [],
+            "venda_hoje_vendedor":   df_hoje.to_dict("records"),
             "ultimo_update":         datetime.now().strftime("%H:%M:%S"),
         }
 
