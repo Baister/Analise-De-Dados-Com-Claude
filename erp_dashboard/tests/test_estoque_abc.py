@@ -1,6 +1,5 @@
 # tests/test_estoque_abc.py
 import pandas as pd
-import pytest
 
 
 # ── Lógica de zerados_lista (espelho de analisar_rapido) ─────────────
@@ -70,8 +69,6 @@ def _classify_abc(items: list, value_key: str = "val_vendido_90d") -> list:
     if total == 0:
         return [{**r, "abc": "C"} for r in items]
     sorted_items = sorted(items, key=lambda r: r.get(value_key, 0), reverse=True)
-    if len(sorted_items) == 1:
-        return [{**sorted_items[0], "abc": "A"}]
     acc = 0.0
     result = []
     for r in sorted_items:
@@ -111,9 +108,9 @@ def test_classify_abc_lista_vazia():
     assert _classify_abc([]) == []
 
 
-def test_classify_abc_item_unico_e_A():
+def test_classify_abc_item_unico_e_C():
     result = _classify_abc([{"CodItem": "X", "val_vendido_90d": 500}])
-    assert result[0]["abc"] == "A"
+    assert result[0]["abc"] == "C"
 
 
 def test_classify_abc_preserva_campos_originais():
