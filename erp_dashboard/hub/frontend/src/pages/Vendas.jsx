@@ -329,7 +329,7 @@ export default function Vendas({ refreshTrigger }) {
                 height={240}
               />
             </>
-          ) : (
+          ) : !filtroVendedor ? (
             <>
               <SectionHeader
                 title={marcaQtdTitle}
@@ -344,6 +344,10 @@ export default function Vendas({ refreshTrigger }) {
                 highlightKey={filtroMarca}
               />
             </>
+          ) : (
+            <div className="flex items-center justify-center h-full text-subtext text-xs">
+              Sem dados para este vendedor
+            </div>
           )}
         </div>
 
