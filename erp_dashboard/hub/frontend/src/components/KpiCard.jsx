@@ -5,9 +5,12 @@ const COLORS = {
   error:   '#da3633',
 };
 
-export default function KpiCard({ label, value, sub, variant = 'default', subAbove = false }) {
+export default function KpiCard({ label, value, sub, variant = 'default', subAbove = false, topBorder }) {
   return (
-    <div className="bg-card border border-card_border rounded-lg p-4 flex-1 min-w-[120px]">
+    <div
+      className="bg-card border border-card_border rounded-lg p-4 flex-1 min-w-[120px]"
+      style={topBorder ? { borderTop: `2px solid ${topBorder}` } : {}}
+    >
       <p className="text-subtext text-[10px] uppercase tracking-wider mb-1.5">{label}</p>
       {subAbove && sub && <p className="text-subtext text-[10px] mb-1">{sub}</p>}
       <p className="text-xl font-bold" style={{ color: COLORS[variant] }}>{value ?? '—'}</p>
