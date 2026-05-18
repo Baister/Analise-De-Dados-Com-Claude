@@ -514,6 +514,31 @@ class BotVendas(BaseBot):
                     ["DescrItem", "faturamento", "quantidade"]
                 ].to_dict("records")
 
+        df_itens_vend = db.query(f"""
+            SELECT TOP 1000
+                d.Vendedor,
+                i.DescrItem,
+                SUM(i.PrecoVndTotItem) AS faturamento,
+                SUM(i.QtdItem)         AS quantidade
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK)
+                ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+            WHERE d.Cancelado = '' AND i.Fat = 1
+              AND {filtro_data}
+              {filtro_plano_i}
+              AND d.Vendedor   IS NOT NULL
+              AND i.DescrItem  IS NOT NULL
+              AND i.CustoRepTotItem >= 0
+            GROUP BY d.Vendedor, i.DescrItem
+            ORDER BY faturamento DESC
+        """)
+        _tiv: dict = {}
+        if not df_itens_vend.empty:
+            for _vnd, _g in df_itens_vend.groupby("Vendedor"):
+                _tiv[_vnd] = _g.nlargest(8, "faturamento")[
+                    ["DescrItem", "faturamento", "quantidade"]
+                ].to_dict("records")
+
         df_vend = db.query(f"""
             SELECT TOP 10
                 v.Vendedor,
@@ -601,6 +626,7 @@ class BotVendas(BaseBot):
             "marcas_por_vendedor":   df_marcas_vend.to_dict("records"),
             "por_grupo":             df_grupo.to_dict("records"),
             "top_itens_por_marca":   _tim,
+            "top_itens_por_vendedor": _tiv,
             "venda_hoje_vendedor":   df_hoje.to_dict("records"),
             "ultimo_update":         datetime.now().strftime("%H:%M:%S"),
         }
