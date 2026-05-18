@@ -146,6 +146,11 @@ export default function Vendas({ refreshTrigger }) {
 
   const porGrupo = useMemo(() => (data?.por_grupo ?? []).slice(0, 8), [data]);
 
+  const itensMarca = useMemo(() => {
+    if (!filtroMarca || !data?.top_itens_por_marca) return [];
+    return data.top_itens_por_marca[filtroMarca] ?? [];
+  }, [data, filtroMarca]);
+
   /* ── Opções dos filtros ────────────────────────────────────────── */
   const vendedoresOpts = useMemo(() => getUniqueValues(topVendedores, 'Vendedor'), [topVendedores]);
   const marcasOpts     = useMemo(() => getUniqueValues(marcasMes, 'DescrMarca'),   [marcasMes]);
@@ -333,6 +338,21 @@ export default function Vendas({ refreshTrigger }) {
                 showLabels
                 highlightKey={filtroVendedor}
                 yAxisWidth={vendYAxisWidth}
+                height={240}
+              />
+            </>
+          ) : itensMarca.length > 0 ? (
+            <>
+              <SectionHeader
+                title={`Top Itens — ${filtroMarca}`}
+                subtitle="por faturamento no mês"
+              />
+              <PieChart
+                data={itensMarca}
+                nameKey="DescrItem"
+                valueKey="faturamento"
+                showValue
+                formatter={shortBrl}
                 height={240}
               />
             </>
