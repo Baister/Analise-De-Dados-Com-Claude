@@ -221,7 +221,7 @@ export default function Estoque({ refreshTrigger }) {
                 <div className="flex justify-between items-center px-2 py-1.5 text-xs">
                   <span className="text-subtext">+ {porMarca.length - 5} marcas</span>
                   <span className="text-subtext">
-                    {shortBrl(porMarca.slice(5).reduce((s, m) => s + (m.valor_estoque ?? 0), 0))}
+                    {shortBrl(porMarca.slice(5).reduce((s, m) => s + (Number(m.valor_estoque) || 0), 0))}
                   </span>
                 </div>
               )}

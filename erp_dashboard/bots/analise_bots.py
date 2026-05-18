@@ -997,7 +997,7 @@ class BotEstoque(BaseBot):
                     GROUP BY i.CodItem
                 ) v ON e.{col_cod} = v.CodItem
                 {_where_gb}
-                ORDER BY ISNULL(v.qtd_vendida_90d, 0) ASC
+                ORDER BY ISNULL(v.val_vendido_90d, 0) DESC
             """
 
         sql_orc_estq = None
@@ -1213,7 +1213,7 @@ class BotEstoque(BaseBot):
                     GROUP BY i.CodItem
                 ) v ON e.{col_cod} = v.CodItem
                 WHERE {" AND ".join(gb_parts)}
-                ORDER BY ISNULL(v.qtd_vendida_90d, 0) ASC
+                ORDER BY ISNULL(v.val_vendido_90d, 0) DESC
             """
             df_gb = db.query(sql_gb, gb_params if gb_params else None)
             r["giro_bruto"] = df_gb.to_dict("records") if not df_gb.empty else []

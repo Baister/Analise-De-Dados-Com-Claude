@@ -24,7 +24,7 @@ export function fmtDate(isoStr) {
 }
 
 export function shortBrl(value) {
-  if (value == null) return '—';
+  if (value == null || Number.isNaN(value)) return '—';
   if (value >= 1_000_000) return `R$${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000)     return `R$${(value / 1_000).toFixed(0)}k`;
   return brl(value);
