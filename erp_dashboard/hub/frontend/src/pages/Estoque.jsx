@@ -38,10 +38,10 @@ const COLS_ABC = { A: CURVA_AB_COLS, B: CURVA_AB_COLS, C: CURVA_C_COLS, Z: ZERAD
 
 // ─── ABC curve metadata ────────────────────────────────────────────────────
 const CURVAS = [
-  { key: 'A', label: 'Curva A', sub: 'Alto Giro',  color: '#238636', solid: true  },
-  { key: 'B', label: 'Curva B', sub: 'Giro Médio', color: '#d29922', solid: false },
-  { key: 'C', label: 'Curva C', sub: 'Sem Giro',   color: '#da3633', solid: false },
-  { key: 'Z', label: 'Zerados', sub: 'Estq = 0',   color: '#8b949e', solid: false },
+  { key: 'A', label: 'Curva A', sub: 'Alto Giro',  color: '#238636' },
+  { key: 'B', label: 'Curva B', sub: 'Giro Médio', color: '#d29922' },
+  { key: 'C', label: 'Curva C', sub: 'Sem Giro',   color: '#da3633' },
+  { key: 'Z', label: 'Zerados', sub: 'Estq = 0',   color: '#8b949e' },
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -103,12 +103,12 @@ export default function Estoque({ refreshTrigger }) {
   );
 
   // Count per curve key (for mini-card labels)
-  const curvaCount = key => {
-    if (key === 'A') return curvaALista.length;
-    if (key === 'B') return curvaBLista.length;
-    if (key === 'C') return curvaCLista.length;
-    return zeradosLista.length;
-  };
+  const curvaCounts = useMemo(() => ({
+    A: curvaALista.length,
+    B: curvaBLista.length,
+    C: curvaCLista.length,
+    Z: zeradosLista.length,
+  }), [curvaALista, curvaBLista, curvaCLista, zeradosLista]);
 
   // True while giro_bruto hasn't arrived yet (analisar() is still running)
   const loadingABC = !data || !('giro_bruto' in data);
@@ -258,7 +258,7 @@ export default function Estoque({ refreshTrigger }) {
                   }
                 >
                   <div className="text-lg font-bold" style={{ color: active ? '#fff' : c.color }}>
-                    {loadingABC ? '…' : curvaCount(c.key)}
+                    {loadingABC ? '…' : curvaCounts[c.key]}
                   </div>
                   <div className="text-[9px] mt-0.5" style={{ color: active ? '#ffffff99' : '#8b949e' }}>
                     {c.label}
