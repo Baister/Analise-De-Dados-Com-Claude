@@ -489,6 +489,31 @@ class BotVendas(BaseBot):
             ORDER BY faturamento DESC
         """)
 
+        df_itens_marca = db.query(f"""
+            SELECT TOP 1000
+                i.DescrMarca,
+                i.DescrItem,
+                SUM(i.PrecoVndTotItem) AS faturamento,
+                SUM(i.QtdItem)         AS quantidade
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK)
+                ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
+            WHERE d.Cancelado = '' AND i.Fat = 1
+              AND {filtro_data}
+              {filtro_plano_i}
+              AND i.DescrMarca IS NOT NULL
+              AND i.DescrItem  IS NOT NULL
+              AND i.CustoRepTotItem >= 0
+            GROUP BY i.DescrMarca, i.DescrItem
+            ORDER BY faturamento DESC
+        """)
+        _tim: dict = {}
+        if not df_itens_marca.empty:
+            for _mrc, _g in df_itens_marca.groupby("DescrMarca"):
+                _tim[_mrc] = _g.nlargest(8, "faturamento")[
+                    ["DescrItem", "faturamento", "quantidade"]
+                ].to_dict("records")
+
         df_vend = db.query(f"""
             SELECT TOP 10
                 v.Vendedor,
@@ -575,6 +600,7 @@ class BotVendas(BaseBot):
             "ticket_medio_vendedor": vend_records,
             "marcas_por_vendedor":   df_marcas_vend.to_dict("records"),
             "por_grupo":             df_grupo.to_dict("records"),
+            "top_itens_por_marca":   _tim,
             "venda_hoje_vendedor":   df_hoje.to_dict("records"),
             "ultimo_update":         datetime.now().strftime("%H:%M:%S"),
         }
@@ -841,6 +867,24 @@ class BotEstoque(BaseBot):
         else:
             _zerados_lista = []
 
+        # Deriva sem_giro_lista: itens com DiasSemVnd >= DIAS_CRITICO, mais parados primeiro
+        _sg_keep = [c for c in ["CodItem", "DescrItem", "DescrMarca", "QtdEstq", "VlrEstq", "DtUltVnd"]
+                    if c in df_criticos.columns]
+        if not df_criticos.empty and "DiasSemVnd" in df_criticos.columns:
+            _df_sg = df_criticos[df_criticos["DiasSemVnd"] >= DIAS_CRITICO].copy()
+            if "DtUltVnd" in _df_sg.columns:
+                _hoje = pd.Timestamp.now()
+                _df_sg["DiasSemVndReal"] = _df_sg["DtUltVnd"].apply(
+                    lambda d: int((_hoje - pd.Timestamp(d)).days) if pd.notna(d) else None
+                )
+                _sg_keep.append("DiasSemVndReal")
+                _df_sg = _df_sg.sort_values("DiasSemVndReal", ascending=False, na_position="last")
+            else:
+                _df_sg = _df_sg.sort_values("DiasSemVnd", ascending=False, na_position="last")
+            _sem_giro_lista = _df_sg[[c for c in _sg_keep if c in _df_sg.columns]].to_dict("records") if not _df_sg.empty else []
+        else:
+            _sem_giro_lista = []
+
         return {
             "total_itens":         _safe_int(df_resumo,  "total_itens"),
             "valor_total_estoque": _safe_float(df_resumo, "valor_total_estoque"),
@@ -848,6 +892,7 @@ class BotEstoque(BaseBot):
             "itens_zerados":       _safe_int(df_resumo,  "itens_zerados"),
             "itens_sem_giro":      _safe_int(df_resumo,  "itens_sem_giro"),
             "zerados_lista":       _zerados_lista,
+            "sem_giro_lista":      _sem_giro_lista,
             "por_marca":           _recs(df_marca),
             "ultimo_update":       datetime.now().strftime("%H:%M:%S"),
         }
@@ -970,18 +1015,21 @@ class BotEstoque(BaseBot):
 
         sql_giro_bruto = None
         if col_cod:
+            # GROUP BY e.CodItem para colapsar múltiplas linhas por filial (CodEmpr)
+            # que vmAnaliseEstqItem retorna uma por (CodEmpr, CodItem).
             _gbp = [f"e.{col_cod} AS CodItem"]
-            for _cx, _ax in [(col_dsc, "DescrItem"), (col_mrc, "DescrMarca"),
-                             (col_qtd, "QtdEstq")]:
+            for _cx, _ax in [(col_dsc, "DescrItem"), (col_mrc, "DescrMarca")]:
                 if _cx:
-                    _gbp.append(f"e.{_cx} AS {_ax}")
+                    _gbp.append(f"MAX(e.{_cx}) AS {_ax}")
+            if col_qtd:
+                _gbp.append(f"SUM(ISNULL(e.{col_qtd}, 0)) AS QtdEstq")
             if col_dtv:
-                _gbp.append(f"e.{col_dtv} AS DtUltVnd")
+                _gbp.append(f"MAX(e.{col_dtv}) AS DtUltVnd")
             _gbp += [
-                "ISNULL(v.qtd_vendida_90d, 0) AS qtd_vendida_90d",
-                "ISNULL(v.val_vendido_90d,  0) AS val_vendido_90d",
+                "ISNULL(MAX(v.qtd_vendida_90d), 0) AS qtd_vendida_90d",
+                "ISNULL(MAX(v.val_vendido_90d),  0) AS val_vendido_90d",
             ]
-            _where_gb = f"WHERE ISNULL(e.{col_qtd},0) > 0" if col_qtd else ""
+            _having_gb = f"HAVING SUM(ISNULL(e.{col_qtd},0)) > 0" if col_qtd else ""
             sql_giro_bruto = f"""
                 SELECT TOP 500 {", ".join(_gbp)}
                 FROM {ev} e WITH (NOLOCK)
@@ -996,8 +1044,9 @@ class BotEstoque(BaseBot):
                       AND i.DtVnd >= DATEADD(day, -90, GETDATE())
                     GROUP BY i.CodItem
                 ) v ON e.{col_cod} = v.CodItem
-                {_where_gb}
-                ORDER BY ISNULL(v.val_vendido_90d, 0) DESC
+                GROUP BY e.{col_cod}
+                {_having_gb}
+                ORDER BY ISNULL(MAX(v.val_vendido_90d), 0) DESC
             """
 
         sql_orc_estq = None
@@ -1128,6 +1177,24 @@ class BotEstoque(BaseBot):
         else:
             _zerados_lista2 = []
 
+        # Deriva sem_giro_lista: itens com DiasSemVnd >= DIAS_CRITICO, mais parados primeiro
+        _sg_keep2 = [c for c in ["CodItem", "DescrItem", "DescrMarca", "QtdEstq", "VlrEstq", "DtUltVnd"]
+                     if c in df_criticos.columns]
+        if not df_criticos.empty and "DiasSemVnd" in df_criticos.columns:
+            _df_sg2 = df_criticos[df_criticos["DiasSemVnd"] >= DIAS_CRITICO].copy()
+            if "DtUltVnd" in _df_sg2.columns:
+                _hoje2 = pd.Timestamp.now()
+                _df_sg2["DiasSemVndReal"] = _df_sg2["DtUltVnd"].apply(
+                    lambda d: int((_hoje2 - pd.Timestamp(d)).days) if pd.notna(d) else None
+                )
+                _sg_keep2.append("DiasSemVndReal")
+                _df_sg2 = _df_sg2.sort_values("DiasSemVndReal", ascending=False, na_position="last")
+            else:
+                _df_sg2 = _df_sg2.sort_values("DiasSemVnd", ascending=False, na_position="last")
+            _sem_giro_lista2 = _df_sg2[[c for c in _sg_keep2 if c in _df_sg2.columns]].to_dict("records") if not _df_sg2.empty else []
+        else:
+            _sem_giro_lista2 = []
+
         return {
             "total_itens":            _safe_int(df_resumo,  "total_itens"),
             "valor_total_estoque":    _safe_float(df_resumo,"valor_total_estoque"),
@@ -1135,6 +1202,7 @@ class BotEstoque(BaseBot):
             "itens_zerados":          _safe_int(df_resumo,  "itens_zerados"),
             "itens_sem_giro":         _safe_int(df_resumo,  "itens_sem_giro"),
             "zerados_lista":          _zerados_lista2,
+            "sem_giro_lista":         _sem_giro_lista2,
             "giro_bruto":             _recs(df_giro_bruto),
             "por_marca":              _recs(df_marca),
             "movimentacao":           df_mov.head(50).to_dict("records") if not df_mov.empty else [],
@@ -1172,32 +1240,38 @@ class BotEstoque(BaseBot):
 
         r = self.analisar_rapido()
 
-        # Filtra zerados_lista por Marca (Python, sem SQL extra)
+        # Filtra zerados_lista e sem_giro_lista por Marca (Python, sem SQL extra)
         if filtros.get("marca"):
             m = filtros["marca"].lower()
             r["zerados_lista"] = [
                 z for z in r.get("zerados_lista", [])
                 if m in str(z.get("DescrMarca", "")).lower()
             ]
+            r["sem_giro_lista"] = [
+                z for z in r.get("sem_giro_lista", [])
+                if m in str(z.get("DescrMarca", "")).lower()
+            ]
 
         # giro_bruto com filtro de Marca aplicado
         if col_cod:
             _gbp = [f"e.{col_cod} AS CodItem"]
-            if col_dsc: _gbp.append(f"e.{col_dsc} AS DescrItem")
-            if col_mrc: _gbp.append(f"e.{col_mrc} AS DescrMarca")
-            if col_qtd: _gbp.append(f"ISNULL(e.{col_qtd},0) AS QtdEstq")
-            if col_dtv: _gbp.append(f"e.{col_dtv} AS DtUltVnd")
+            if col_dsc: _gbp.append(f"MAX(e.{col_dsc}) AS DescrItem")
+            if col_mrc: _gbp.append(f"MAX(e.{col_mrc}) AS DescrMarca")
+            if col_qtd: _gbp.append(f"SUM(ISNULL(e.{col_qtd},0)) AS QtdEstq")
+            if col_dtv: _gbp.append(f"MAX(e.{col_dtv}) AS DtUltVnd")
             _gbp += [
-                "ISNULL(v.qtd_vendida_90d, 0) AS qtd_vendida_90d",
-                "ISNULL(v.val_vendido_90d,  0) AS val_vendido_90d",
+                "ISNULL(MAX(v.qtd_vendida_90d), 0) AS qtd_vendida_90d",
+                "ISNULL(MAX(v.val_vendido_90d),  0) AS val_vendido_90d",
             ]
-            gb_parts = ["1=1"]
+            gb_where_parts = ["1=1"]
+            gb_having_parts: list = []
             gb_params: list = []
             if col_qtd:
-                gb_parts.append(f"ISNULL(e.{col_qtd},0) > 0")
+                gb_having_parts.append(f"SUM(ISNULL(e.{col_qtd},0)) > 0")
             if filtros.get("marca") and col_mrc:
-                gb_parts.append(f"e.{col_mrc} LIKE ?")
+                gb_where_parts.append(f"e.{col_mrc} LIKE ?")
                 gb_params.append(f"%{filtros['marca'][:100]}%")
+            _gb_having = ("HAVING " + " AND ".join(gb_having_parts)) if gb_having_parts else ""
             sql_gb = f"""
                 SELECT TOP 500 {", ".join(_gbp)}
                 FROM {ev} e WITH (NOLOCK)
@@ -1212,8 +1286,10 @@ class BotEstoque(BaseBot):
                       AND i.DtVnd >= DATEADD(day, -90, GETDATE())
                     GROUP BY i.CodItem
                 ) v ON e.{col_cod} = v.CodItem
-                WHERE {" AND ".join(gb_parts)}
-                ORDER BY ISNULL(v.val_vendido_90d, 0) DESC
+                WHERE {" AND ".join(gb_where_parts)}
+                GROUP BY e.{col_cod}
+                {_gb_having}
+                ORDER BY ISNULL(MAX(v.val_vendido_90d), 0) DESC
             """
             df_gb = db.query(sql_gb, gb_params if gb_params else None)
             r["giro_bruto"] = df_gb.to_dict("records") if not df_gb.empty else []
