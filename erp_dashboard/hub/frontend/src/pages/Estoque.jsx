@@ -6,6 +6,8 @@ import { brl, shortBrl, fmtDate } from '../utils/format';
 import { getUniqueValues } from '../utils/filters';
 import { classifyABC } from '../utils/estoque';
 
+const PAGE_SIZE = 50;
+
 // ─── Column definitions ────────────────────────────────────────────────────
 const CURVA_AB_COLS = [
   { key: 'CodItem',         label: 'Código' },
@@ -20,28 +22,50 @@ const CURVA_C_COLS = [
   { key: 'CodItem',    label: 'Código' },
   { key: 'DescrItem',  label: 'Descrição' },
   { key: 'DescrMarca', label: 'Marca' },
-  { key: 'QtdEstq',    label: 'Qtd',            render: v => String(v ?? 0) },
-  { key: 'giro90d',    label: 'Giro 90d',        render: v => (v ?? 0).toFixed(2) },
-  { key: 'DtUltVnd',   label: 'Sem giro desde',  render: v => (v ? fmtDate(v) : '—') },
+  { key: 'QtdEstq',    label: 'Qtd',          render: v => String(v ?? 0) },
+  { key: 'giro90d',    label: 'Giro 90d',     render: v => (v ?? 0).toFixed(2) },
+  { key: 'DtUltVnd',   label: 'Última venda', render: v => (v ? fmtDate(v) : '—') },
 ];
 
 const ZERADOS_COLS = [
   { key: 'CodItem',    label: 'Código' },
   { key: 'DescrItem',  label: 'Descrição' },
   { key: 'DescrMarca', label: 'Marca' },
-  { key: 'VlrEstq',    label: 'Vlr Estq',        render: v => brl(v) },
-  { key: 'DtUltVnd',   label: 'Zerado desde',     render: v => (v ? fmtDate(v) : '—') },
+  { key: 'VlrEstq',    label: 'Vlr Estq',    render: v => brl(v) },
+  { key: 'DtUltVnd',   label: 'Zerado desde', render: v => (v ? fmtDate(v) : '—') },
+];
+
+function fmtTempo(dias) {
+  if (dias == null) return 'Nunca vendido';
+  if (dias >= 365) {
+    const a = Math.floor(dias / 365);
+    const m = Math.floor((dias % 365) / 30);
+    return m > 0 ? `${a}a ${m}m` : `${a} ano${a !== 1 ? 's' : ''}`;
+  }
+  if (dias >= 30) return `${Math.floor(dias / 30)} meses`;
+  return `${dias} dias`;
+}
+
+const SEM_GIRO_COLS = [
+  { key: 'CodItem',        label: 'Código' },
+  { key: 'DescrItem',      label: 'Descrição' },
+  { key: 'DescrMarca',     label: 'Marca' },
+  { key: 'QtdEstq',        label: 'Qtd',          render: v => String(v ?? 0) },
+  { key: 'VlrEstq',        label: 'Vlr Estq',     render: v => shortBrl(v) },
+  { key: 'DiasSemVndReal', label: 'Tempo parado', render: v => fmtTempo(v) },
+  { key: 'DtUltVnd',       label: 'Última venda', render: v => (v ? fmtDate(v) : '—') },
 ];
 
 // Maps activeCurva key → column definition for DataTable
-const COLS_ABC = { A: CURVA_AB_COLS, B: CURVA_AB_COLS, C: CURVA_C_COLS, Z: ZERADOS_COLS };
+const COLS_ABC = { A: CURVA_AB_COLS, B: CURVA_AB_COLS, C: CURVA_C_COLS, Z: ZERADOS_COLS, S: SEM_GIRO_COLS };
 
 // ─── ABC curve metadata ────────────────────────────────────────────────────
 const CURVAS = [
-  { key: 'A', label: 'Curva A', sub: 'Alto Giro',  color: '#238636' },
-  { key: 'B', label: 'Curva B', sub: 'Giro Médio', color: '#d29922' },
-  { key: 'C', label: 'Curva C', sub: 'Sem Giro',   color: '#da3633' },
-  { key: 'Z', label: 'Zerados', sub: 'Estq = 0',   color: '#8b949e' },
+  { key: 'A', label: 'Curva A',  sub: 'Alto Giro',  color: '#238636' },
+  { key: 'B', label: 'Curva B',  sub: 'Giro Médio', color: '#d29922' },
+  { key: 'C', label: 'Curva C',  sub: 'Baixo Giro', color: '#da3633' },
+  { key: 'Z', label: 'Zerados',  sub: 'Estq = 0',   color: '#8b949e' },
+  { key: 'S', label: 'Sem Giro', sub: '90+ dias',   color: '#a371f7' },
 ];
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -59,6 +83,7 @@ export default function Estoque({ refreshTrigger }) {
   const [filters, setFilters]         = useState({});
   const [activeCurva, setActiveCurva] = useState('A');
   const [textoBusca, setTextoBusca]   = useState('');
+  const [curvaPage, setCurvaPage]     = useState(0);
 
   const apiFilters = useMemo(() => {
     const f = {};
@@ -72,6 +97,7 @@ export default function Estoque({ refreshTrigger }) {
   const porMarca     = data?.por_marca     ?? [];
   const giroBruto    = data?.giro_bruto    ?? [];
   const zeradosLista = data?.zerados_lista ?? [];
+  const semGiroLista = data?.sem_giro_lista ?? [];
   const totalItens   = data?.total_itens   ?? 0;
   const itensZerados = data?.itens_zerados ?? 0;
   const itensSemGiro = data?.itens_sem_giro ?? 0;
@@ -94,12 +120,20 @@ export default function Estoque({ refreshTrigger }) {
     if (activeCurva === 'A') return curvaALista;
     if (activeCurva === 'B') return curvaBLista;
     if (activeCurva === 'C') return curvaCLista;
+    if (activeCurva === 'S') return semGiroLista;
     return zeradosLista;
-  }, [activeCurva, curvaALista, curvaBLista, curvaCLista, zeradosLista]);
+  }, [activeCurva, curvaALista, curvaBLista, curvaCLista, zeradosLista, semGiroLista]);
 
   const curvaRowsFiltrado = useMemo(
     () => textFilter(curvaRows, textoBusca),
     [curvaRows, textoBusca]
+  );
+
+  // Pagination
+  const totalPages = Math.ceil(curvaRowsFiltrado.length / PAGE_SIZE);
+  const curvaRowsPage = useMemo(
+    () => curvaRowsFiltrado.slice(curvaPage * PAGE_SIZE, (curvaPage + 1) * PAGE_SIZE),
+    [curvaRowsFiltrado, curvaPage]
   );
 
   // Count per curve key (for mini-card labels)
@@ -108,10 +142,18 @@ export default function Estoque({ refreshTrigger }) {
     B: curvaBLista.length,
     C: curvaCLista.length,
     Z: zeradosLista.length,
-  }), [curvaALista, curvaBLista, curvaCLista, zeradosLista]);
+    S: semGiroLista.length,
+  }), [curvaALista, curvaBLista, curvaCLista, zeradosLista, semGiroLista]);
 
   // True while giro_bruto hasn't arrived yet (analisar() is still running)
   const loadingABC = !data || !('giro_bruto' in data);
+
+  // ── Helper to change curva and reset page + search ──
+  function selectCurva(key) {
+    setActiveCurva(key);
+    setTextoBusca('');
+    setCurvaPage(0);
+  }
 
   // ── Early returns ──
   if (loading && !data) {
@@ -154,7 +196,7 @@ export default function Estoque({ refreshTrigger }) {
         <div className="flex items-center gap-3">
           <select
             value={filters.DescrMarca || 'todos'}
-            onChange={e => { setFilters({ ...filters, DescrMarca: e.target.value }); setTextoBusca(''); setActiveCurva('A'); }}
+            onChange={e => { setFilters({ ...filters, DescrMarca: e.target.value }); setTextoBusca(''); setActiveCurva('A'); setCurvaPage(0); }}
             className="bg-card border border-card_border rounded-lg px-3 py-1.5 text-text_main text-xs focus:outline-none focus:border-accent"
           >
             {marcasOpts.map(opt => (
@@ -242,14 +284,18 @@ export default function Estoque({ refreshTrigger }) {
             <span className="text-[9px] text-subtext">últimos 90 dias</span>
           </div>
 
-          {/* Mini-card selector */}
-          <div className="grid grid-cols-4 gap-2 mb-3">
+          {/* Mini-card selector — 5 colunas */}
+          <div className="grid grid-cols-5 gap-1.5 mb-3">
             {CURVAS.map(c => {
               const active = activeCurva === c.key;
+              // Sem Giro usa semGiroLista.length diretamente (disponível antes do giro_bruto)
+              const count = c.key === 'S'
+                ? semGiroLista.length
+                : (loadingABC ? null : curvaCounts[c.key]);
               return (
                 <button
                   key={c.key}
-                  onClick={() => { setActiveCurva(c.key); setTextoBusca(''); }}
+                  onClick={() => selectCurva(c.key)}
                   className="rounded-lg p-2 text-center transition-all"
                   style={
                     active
@@ -257,10 +303,10 @@ export default function Estoque({ refreshTrigger }) {
                       : { background: '#21262d', border: `1px solid ${c.color}` }
                   }
                 >
-                  <div className="text-lg font-bold" style={{ color: active ? '#fff' : c.color }}>
-                    {loadingABC ? '…' : curvaCounts[c.key]}
+                  <div className="text-base font-bold leading-tight" style={{ color: active ? '#fff' : c.color }}>
+                    {count === null ? '…' : count}
                   </div>
-                  <div className="text-[9px] mt-0.5" style={{ color: active ? '#ffffff99' : '#8b949e' }}>
+                  <div className="text-[9px] mt-0.5 truncate" style={{ color: active ? '#ffffff99' : '#8b949e' }}>
                     {c.label}
                   </div>
                   <div className="text-[8px]" style={{ color: active ? '#ffffff77' : '#8b949e' }}>
@@ -282,17 +328,46 @@ export default function Estoque({ refreshTrigger }) {
                 type="text"
                 placeholder="Filtrar por produto ou código..."
                 value={textoBusca}
-                onChange={e => setTextoBusca(e.target.value)}
+                onChange={e => { setTextoBusca(e.target.value); setCurvaPage(0); }}
                 className="w-full px-3 py-1.5 text-xs bg-card_border border border-card_border rounded-lg text-text_main placeholder-subtext focus:outline-none focus:border-blue-500"
               />
             </div>
           </div>
 
           {/* Detail table */}
-          {loadingABC
+          {loadingABC && activeCurva !== 'S' && activeCurva !== 'Z'
             ? <p className="text-xs text-subtext py-4">Carregando análise de giro…</p>
-            : <DataTable columns={COLS_ABC[activeCurva]} rows={curvaRowsFiltrado} />
+            : <DataTable columns={COLS_ABC[activeCurva]} rows={curvaRowsPage} />
           }
+
+          {/* Pagination controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between mt-2 text-[10px] text-subtext">
+              <span>{curvaRowsFiltrado.length} itens · pág {curvaPage + 1}/{totalPages}</span>
+              <div className="flex items-center gap-1">
+                <button
+                  disabled={curvaPage === 0}
+                  onClick={() => setCurvaPage(0)}
+                  className="px-1.5 py-0.5 rounded bg-card_border disabled:opacity-30 hover:text-text_main"
+                >«</button>
+                <button
+                  disabled={curvaPage === 0}
+                  onClick={() => setCurvaPage(p => p - 1)}
+                  className="px-1.5 py-0.5 rounded bg-card_border disabled:opacity-30 hover:text-text_main"
+                >‹</button>
+                <button
+                  disabled={curvaPage >= totalPages - 1}
+                  onClick={() => setCurvaPage(p => p + 1)}
+                  className="px-1.5 py-0.5 rounded bg-card_border disabled:opacity-30 hover:text-text_main"
+                >›</button>
+                <button
+                  disabled={curvaPage >= totalPages - 1}
+                  onClick={() => setCurvaPage(totalPages - 1)}
+                  className="px-1.5 py-0.5 rounded bg-card_border disabled:opacity-30 hover:text-text_main"
+                >»</button>
+              </div>
+            </div>
+          )}
 
         </div>
 
