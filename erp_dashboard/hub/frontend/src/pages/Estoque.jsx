@@ -143,7 +143,7 @@ export default function Estoque({ refreshTrigger }) {
     );
   }
 
-  const curvaAtiva = CURVAS.find(c => c.key === activeCurva);
+  const curvaAtiva = CURVAS.find(c => c.key === activeCurva) ?? CURVAS[0];
 
   return (
     <div className="p-6">
@@ -154,10 +154,10 @@ export default function Estoque({ refreshTrigger }) {
         <div className="flex items-center gap-3">
           <select
             value={filters.DescrMarca || 'todos'}
-            onChange={e => setFilters({ ...filters, DescrMarca: e.target.value })}
+            onChange={e => { setFilters({ ...filters, DescrMarca: e.target.value }); setTextoBusca(''); setActiveCurva('A'); }}
             className="bg-card border border-card_border rounded-lg px-3 py-1.5 text-text_main text-xs focus:outline-none focus:border-accent"
           >
-            {(['todos', ...marcasOpts]).map(opt => (
+            {marcasOpts.map(opt => (
               <option key={opt} value={opt}>
                 {opt === 'todos' ? 'Todas as marcas' : opt}
               </option>
