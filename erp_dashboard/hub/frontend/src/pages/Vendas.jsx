@@ -356,7 +356,7 @@ export default function Vendas({ refreshTrigger }) {
                 height={240}
               />
             </>
-          ) : porGrupo.length > 0 ? (
+          ) : !filtroMarca && porGrupo.length > 0 ? (
             <>
               <SectionHeader title="Faturamento por Grupo" subtitle="top 8 grupos de produto" />
               <PieChart
