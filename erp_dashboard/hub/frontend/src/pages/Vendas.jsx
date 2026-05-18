@@ -151,6 +151,11 @@ export default function Vendas({ refreshTrigger }) {
     return data.top_itens_por_marca[filtroMarca] ?? [];
   }, [data, filtroMarca]);
 
+  const itensVendedor = useMemo(() => {
+    if (!filtroVendedor || !data?.top_itens_por_vendedor) return [];
+    return data.top_itens_por_vendedor[filtroVendedor] ?? [];
+  }, [data, filtroVendedor]);
+
   /* ── Opções dos filtros ────────────────────────────────────────── */
   const vendedoresOpts = useMemo(() => getUniqueValues(topVendedores, 'Vendedor'), [topVendedores]);
   const marcasOpts     = useMemo(() => getUniqueValues(marcasMes, 'DescrMarca'),   [marcasMes]);
@@ -309,18 +314,37 @@ export default function Vendas({ refreshTrigger }) {
       {/* ── Gráficos — linha 2 ────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-card border border-card_border rounded-xl p-4">
-          <SectionHeader
-            title={marcaQtdTitle}
-            subtitle="unidades vendidas"
-          />
-          <PieChart
-            data={marcasFiltradas}
-            nameKey="DescrMarca"
-            valueKey="quantidade"
-            showValue
-            height={240}
-            highlightKey={filtroMarca}
-          />
+          {filtroVendedor && itensVendedor.length > 0 ? (
+            <>
+              <SectionHeader
+                title={`Top Itens — ${filtroVendedor}`}
+                subtitle="por faturamento no mês"
+              />
+              <PieChart
+                data={itensVendedor}
+                nameKey="DescrItem"
+                valueKey="faturamento"
+                showValue
+                formatter={shortBrl}
+                height={240}
+              />
+            </>
+          ) : (
+            <>
+              <SectionHeader
+                title={marcaQtdTitle}
+                subtitle="unidades vendidas"
+              />
+              <PieChart
+                data={marcasFiltradas}
+                nameKey="DescrMarca"
+                valueKey="quantidade"
+                showValue
+                height={240}
+                highlightKey={filtroMarca}
+              />
+            </>
+          )}
         </div>
 
         <div className="bg-card border border-card_border rounded-xl p-4">
