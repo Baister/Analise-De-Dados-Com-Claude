@@ -514,31 +514,6 @@ class BotVendas(BaseBot):
                     ["DescrItem", "faturamento", "quantidade"]
                 ].to_dict("records")
 
-        df_itens_vend = db.query(f"""
-            SELECT TOP 1000
-                d.Vendedor,
-                i.DescrItem,
-                SUM(i.PrecoVndTotItem) AS faturamento,
-                SUM(i.QtdItem)         AS quantidade
-            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK)
-                ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
-            WHERE d.Cancelado = '' AND i.Fat = 1
-              AND {filtro_data}
-              {filtro_plano_i}
-              AND d.Vendedor   IS NOT NULL
-              AND i.DescrItem  IS NOT NULL
-              AND i.CustoRepTotItem >= 0
-            GROUP BY d.Vendedor, i.DescrItem
-            ORDER BY faturamento DESC
-        """)
-        _tiv: dict = {}
-        if not df_itens_vend.empty:
-            for _vnd, _g in df_itens_vend.groupby("Vendedor"):
-                _tiv[_vnd] = _g.nlargest(8, "faturamento")[
-                    ["DescrItem", "faturamento", "quantidade"]
-                ].to_dict("records")
-
         df_vend = db.query(f"""
             SELECT TOP 10
                 v.Vendedor,
@@ -588,8 +563,32 @@ class BotVendas(BaseBot):
                 ].copy()
             else:
                 df_marcas_vend = pd.DataFrame()
+            _raw_iv = db.new_conn_query(f"""
+                SELECT TOP 1000
+                    i.CodVend,
+                    i.DescrItem,
+                    SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.PrecoVndTotItem ELSE 0 END) AS faturamento,
+                    SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.QtdItem ELSE 0 END)         AS quantidade
+                FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+                WHERE i.DtVnd >= {_MES_INI}
+                  AND i.DtVnd <  {_MES_FIM}
+                  AND i.Fat = 1
+                  AND i.DescrItem IS NOT NULL
+                  AND i.CodVend IN ({_in_cv})
+                GROUP BY i.CodVend, i.DescrItem
+                ORDER BY faturamento DESC
+            """)
+            _tiv: dict = {}
+            if not _raw_iv.empty:
+                _raw_iv['Vendedor'] = _raw_iv['CodVend'].astype(str).map(_cod_vend_map_v)
+                _raw_iv = _raw_iv.dropna(subset=['Vendedor'])
+                for _vnd, _g in _raw_iv.groupby('Vendedor'):
+                    _tiv[_vnd] = _g.nlargest(8, 'faturamento')[
+                        ['DescrItem', 'faturamento', 'quantidade']
+                    ].to_dict('records')
         else:
             df_marcas_vend = pd.DataFrame()
+            _tiv = {}
 
         df_hoje = db.query(f"""
             SELECT TOP 50
