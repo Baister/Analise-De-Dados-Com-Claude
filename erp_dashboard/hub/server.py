@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from config.settings import DASHBOARD_PASSWORD, ALERTAS
-from core.cache import cache as _cache
+from core.cache import cache as _cache, _clean_nan as _clean_nan
 
 logger = logging.getLogger(__name__)
 
@@ -440,7 +440,7 @@ def dados_filtrado(
 
     try:
         resultado = bot.analisar_filtrado(filtros)
-        return JSONResponse(content=resultado)
+        return JSONResponse(content=_clean_nan(resultado))
     except Exception as e:
         logger.error("dados_filtrado [%s] erro: %s", bot_name, e)
         raise HTTPException(status_code=503, detail=str(e))
@@ -448,7 +448,11 @@ def dados_filtrado(
 
 @app.get("/dados/{bot_name}")
 def dados(bot_name: str, _: str = Depends(verify_token)):
-    data = _cache.load(bot_name)
+    try:
+        data = _cache.load(bot_name)
+    except Exception as e:
+        logger.error("cache.load [%s] erro: %s", bot_name, e)
+        raise HTTPException(status_code=503, detail="Erro ao carregar dados do cache")
     if data is None:
         raise HTTPException(status_code=404, detail=f"Sem dados para '{bot_name}'")
     return JSONResponse(content=data)
