@@ -1433,10 +1433,9 @@ class BotFinanceiro(BaseBot):
                 df_caixa_rec["DtLcto"].str[:10] == hoje_str, "ValCtRec"
             ].sum())
             # semana = últimos 7 dias
-            import pandas as _pd
             try:
-                df_caixa_rec["DtLcto_dt"] = _pd.to_datetime(df_caixa_rec["DtLcto"], errors="coerce")
-                semana_inicio = _pd.Timestamp.now() - _pd.Timedelta(days=6)
+                df_caixa_rec["DtLcto_dt"] = pd.to_datetime(df_caixa_rec["DtLcto"], errors="coerce")
+                semana_inicio = pd.Timestamp.now() - pd.Timedelta(days=6)
                 rec_semana = float(df_caixa_rec.loc[
                     df_caixa_rec["DtLcto_dt"] >= semana_inicio, "ValCtRec"
                 ].sum())
@@ -1464,7 +1463,7 @@ class BotFinanceiro(BaseBot):
                 SUM(De1a20)  AS de1a20
             FROM Blue.dbo.vmCtRecVinte WITH (NOLOCK)
         """)
-        a_vencer_20d = _safe_float(df_vinte, "total_20d")
+        a_vencer_20d = _safe_float(df_vinte, "a_vencer_20d")
 
         # ── 8. Aging receber 30d (vmCtRecTrinta) ─────────────────────────
         df_trinta = db.query("""
