@@ -1383,6 +1383,18 @@ class BotFinanceiro(BaseBot):
             mask_pg_inad = df_cp_res["Vencendo"].str.strip().str.lower() == "atrasados"
             vencido_pagar = float(df_cp_res.loc[mask_pg_inad, "CtPagar"].sum())
 
+        # ── Fluxo de caixa combinado (vmRecPagResumo) ────────────────────
+        df_rec_pag = db.query("""
+            SELECT TOP 1
+                SUM(TotalRec)       AS total_rec,
+                SUM(TotalPg)        AS total_pg,
+                SUM(DiferencaRecPg) AS diferenca_rec_pg
+            FROM Blue.dbo.vmRecPagResumo WITH (NOLOCK)
+        """)
+        fluxo_caixa = _safe_float(df_rec_pag, "diferenca_rec_pg")
+        if fluxo_caixa == 0.0:
+            fluxo_caixa = round(total_a_receber - total_a_pagar, 2)
+
         # ── 4. Índice de inadimplência (vmIndiceInadimplenciaGeral) ──────
         df_inad_idx = db.query("""
             SELECT TOP 1
@@ -1601,7 +1613,7 @@ class BotFinanceiro(BaseBot):
             "ticket_medio":         _safe_float(df_dia, "ticket_medio"),
             "total_a_receber":      total_a_receber,
             "total_a_pagar":        total_a_pagar,
-            "fluxo_caixa":          round(total_a_receber - total_a_pagar, 2),
+            "fluxo_caixa":          round(fluxo_caixa, 2),
             "recebido_mes":         round(recebido_mes, 2),
             "total_inadimplente":   round(total_inadimplente, 2),
             "qtd_inadimplentes":    qtd_inadimplentes,
