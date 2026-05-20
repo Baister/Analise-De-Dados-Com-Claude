@@ -81,28 +81,22 @@ const MOV_CC_COLS = [
 // ---------------------------------------------------------------------------
 // Helper — aggregate mov_financeiro into Entrada/Saída per date (last 14 days)
 // ---------------------------------------------------------------------------
-function buildMovChart(movList) {
-  if (!movList?.length) return [];
-
-  // Sort by date and keep last 14 distinct dates
+function buildMovChart(movFinanceiro) {
   const byDate = {};
-  for (const row of movList) {
-    const dt = row.DtMov ? String(row.DtMov).slice(0, 10) : null;
-    if (!dt) continue;
+  for (const m of movFinanceiro) {
+    const dt = m.DtMov ? String(m.DtMov).slice(0, 10) : null;
+    if (!dt || dt === 'null') continue;
     if (!byDate[dt]) byDate[dt] = { data: dt, Entrada: 0, Saída: 0 };
-    const tipo = String(row.TipoMov ?? '').toLowerCase();
-    if (tipo.includes('entrada') || tipo.includes('receb')) {
-      byDate[dt].Entrada += Number(row.ValMov ?? 0);
-    } else {
-      byDate[dt].Saída += Number(row.ValMov ?? 0);
+    const val = Number(m.ValMov) || 0;
+    const tipo = String(m.TipoMov ?? '').toLowerCase();
+    if (tipo.includes('entrada') || tipo.includes('receb') || tipo === 'e' || tipo === 'r') {
+      byDate[dt].Entrada += val;
+    } else if (tipo.includes('saida') || tipo.includes('saída') || tipo.includes('pag') || tipo.includes('desp') || tipo === 's' || tipo === 'p') {
+      byDate[dt].Saída += val;
     }
+    // unknown types are silently skipped — no mislabelling
   }
-
-  const sorted = Object.values(byDate).sort((a, b) => a.data.localeCompare(b.data));
-  return sorted.slice(-14).map(r => ({
-    ...r,
-    data: fmtDate(r.data),
-  }));
+  return Object.values(byDate).sort((a, b) => a.data.localeCompare(b.data)).slice(-14);
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +104,38 @@ function buildMovChart(movList) {
 // ---------------------------------------------------------------------------
 export default function Financeiro({ refreshTrigger }) {
   const { data, loading, error, isEmpty } = useFilteredDados('financeiro', {}, refreshTrigger);
+
+  // Destructure data with safe defaults — ALL hooks and derived state before early returns
+  const fat_dia              = data?.fat_dia              ?? 0;
+  const ticket_medio         = data?.ticket_medio         ?? 0;
+  const total_a_receber      = data?.total_a_receber      ?? 0;
+  const total_a_pagar        = data?.total_a_pagar        ?? 0;
+  const fluxo_caixa          = data?.fluxo_caixa          ?? 0;
+  const recebido_mes         = data?.recebido_mes         ?? 0;
+  const total_inadimplente   = data?.total_inadimplente   ?? 0;
+  const qtd_inadimplentes    = data?.qtd_inadimplentes    ?? 0;
+  const indice_inadimplencia = data?.indice_inadimplencia ?? 0;
+
+  const inadimplentes      = data?.top_inadimplentes    ?? [];
+  const porTipo            = data?.por_tipo_recebimento ?? [];
+  const rec_hoje           = data?.rec_hoje             ?? 0;
+  const rec_semana         = data?.rec_semana           ?? 0;
+  const a_vencer_20d       = data?.a_vencer_20d         ?? 0;
+  const a_vencer_30d       = data?.a_vencer_30d         ?? 0;
+  const titulosCR          = data?.titulos_lista        ?? [];
+
+  const vencido_pagar      = data?.vencido_pagar        ?? 0;
+  const a_vencer_pagar_20d = data?.a_vencer_pagar_20d   ?? 0;
+  const titulosCP          = data?.titulos_pagar_lista  ?? [];
+
+  const movFinanceiro = data?.mov_financeiro   ?? [];
+  const movCC         = data?.mov_centro_custo ?? [];
+  const nfeList       = data?.nfe_monitor      ?? [];
+  const pedidosList   = data?.pedidos_conf     ?? [];
+
+  const movChartData = useMemo(() => buildMovChart(movFinanceiro), [movFinanceiro]);
+
+  const topInad = inadimplentes[0] ?? null;
 
   // Loading / error / empty guards
   if (loading && !data) {
@@ -138,39 +164,6 @@ export default function Financeiro({ refreshTrigger }) {
       </div>
     );
   }
-
-  // Destructure data with safe defaults
-  const fat_dia              = data?.fat_dia              ?? 0;
-  const ticket_medio         = data?.ticket_medio         ?? 0;
-  const total_a_receber      = data?.total_a_receber      ?? 0;
-  const total_a_pagar        = data?.total_a_pagar        ?? 0;
-  const fluxo_caixa          = data?.fluxo_caixa          ?? 0;
-  const recebido_mes         = data?.recebido_mes         ?? 0;
-  const total_inadimplente   = data?.total_inadimplente   ?? 0;
-  const qtd_inadimplentes    = data?.qtd_inadimplentes    ?? 0;
-  const indice_inadimplencia = data?.indice_inadimplencia ?? 0;
-
-  const porTipo        = data?.por_tipo_recebimento ?? [];
-  const rec_hoje       = data?.rec_hoje             ?? 0;
-  const rec_semana     = data?.rec_semana           ?? 0;
-  const a_vencer_20d   = data?.a_vencer_20d         ?? 0;
-  const a_vencer_30d   = data?.a_vencer_30d         ?? 0;
-  const titulosCR      = data?.titulos_lista        ?? [];
-  const inadimplentes  = data?.top_inadimplentes    ?? [];
-
-  const vencido_pagar      = data?.vencido_pagar      ?? 0;
-  const a_vencer_pagar_20d = data?.a_vencer_pagar_20d ?? 0;
-  const titulosCP          = data?.titulos_pagar_lista ?? [];
-
-  const movFinanceiro = data?.mov_financeiro  ?? [];
-  const movCC         = data?.mov_centro_custo ?? [];
-  const nfeList       = data?.nfe_monitor     ?? [];
-  const pedidosList   = data?.pedidos_conf    ?? [];
-
-  // eslint-disable-next-line react-hooks/rules-of-hooks
-  const movChartData = useMemo(() => buildMovChart(movFinanceiro), [movFinanceiro]);
-
-  const topInad = inadimplentes[0] ?? null;
 
   return (
     <div className="p-6 space-y-6">
