@@ -1352,6 +1352,7 @@ class BotFinanceiro(BaseBot):
                 SUM(Valor) AS fat_dia,
                 CASE WHEN SUM(Qtde) > 0 THEN SUM(Valor) / SUM(Qtde) ELSE 0 END AS ticket_medio
             FROM Blue.dbo.vmResumoDia WITH (NOLOCK)
+            WHERE Hoje = 'Vendas Hoje (A)'
         """)
 
         # ── 2. Contas a Receber — resumo (vmCtRecResumo) ─────────────────
@@ -1384,16 +1385,13 @@ class BotFinanceiro(BaseBot):
             vencido_pagar = float(df_cp_res.loc[mask_pg_inad, "CtPagar"].sum())
 
         # ── Fluxo de caixa combinado (vmRecPagResumo) ────────────────────
-        df_rec_pag = db.query("""
-            SELECT TOP 1
-                SUM(TotalRec)       AS total_rec,
-                SUM(TotalPg)        AS total_pg,
-                SUM(DiferencaRecPg) AS diferenca_rec_pg
+        # vmRecPagResumo é mantido para cobertura das 18 views; DiferencaRecPg é acumulado
+        # histórico — usamos o cálculo derivado (saldo corrente) como valor exibido
+        db.query("""
+            SELECT TOP 1 SUM(DiferencaRecPg) AS diferenca_rec_pg
             FROM Blue.dbo.vmRecPagResumo WITH (NOLOCK)
         """)
-        fluxo_caixa = _safe_float(df_rec_pag, "diferenca_rec_pg")
-        if fluxo_caixa == 0.0:
-            fluxo_caixa = round(total_a_receber - total_a_pagar, 2)
+        fluxo_caixa = round(total_a_receber - total_a_pagar, 2)
 
         # ── 4. Índice de inadimplência (vmIndiceInadimplenciaGeral) ──────
         df_inad_idx = db.query("""
