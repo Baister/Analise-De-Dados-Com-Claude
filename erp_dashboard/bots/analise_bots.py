@@ -4,6 +4,7 @@
 # Separação Orçamento × Venda usa Blue.dbo.TbOrcPedVnd.OrcPedVnd (1=Orc, 2=Venda).
 
 import concurrent.futures
+import math
 import re as _re
 import pandas as pd
 import threading
@@ -1548,7 +1549,6 @@ class BotFinanceiro(BaseBot):
             }
 
         def _drill(df):
-            import math
             if df.empty:
                 return []
             rows = []
