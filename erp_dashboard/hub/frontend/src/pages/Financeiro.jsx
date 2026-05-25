@@ -80,7 +80,8 @@ function VencimentosBarChart({ bars, onTodayClick }) {
     </p>
   )
 
-  const todayStr = new Date().toISOString().slice(0, 10)
+  const d = new Date()
+  const todayStr = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
   const maxQtd = Math.max(...bars.map(b => b.qtd || 0), 1)
 
   return (
@@ -90,6 +91,8 @@ function VencimentosBarChart({ bars, onTodayClick }) {
           const isToday = b.data === todayStr
           const h = Math.max(Math.round((b.qtd / maxQtd) * 72), 3)
           const color = isToday ? '#f59e0b' : '#3b82f6'
+          const parts = b.data.split('-')
+          const label = parts.length === 3 ? `${parts[2]}/${parts[1]}` : b.data
           return (
             <div
               key={b.data}
@@ -109,6 +112,16 @@ function VencimentosBarChart({ bars, onTodayClick }) {
                   opacity: isToday ? 1 : 0.7,
                 }}
               />
+              {tooltip === b && (
+                <div
+                  className="absolute bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white pointer-events-none z-10"
+                  style={{ bottom: '100%', left: '50%', transform: 'translateX(-50%)', whiteSpace: 'nowrap', marginBottom: 4 }}
+                >
+                  <div className="font-medium">{label}</div>
+                  <div>{b.qtd} título{b.qtd !== 1 ? 's' : ''}</div>
+                  <div>{fmtR(b.valor)}</div>
+                </div>
+              )}
             </div>
           )
         })}
@@ -129,17 +142,6 @@ function VencimentosBarChart({ bars, onTodayClick }) {
           )
         })}
       </div>
-      {/* Tooltip */}
-      {tooltip && (
-        <div
-          className="absolute bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white pointer-events-none z-10"
-          style={{ bottom: '110%', left: '50%', transform: 'translateX(-50%)', whiteSpace: 'nowrap' }}
-        >
-          <div className="font-medium">{tooltip.data?.slice(5).replace('-', '/')}</div>
-          <div>{tooltip.qtd} título{tooltip.qtd !== 1 ? 's' : ''}</div>
-          <div>{fmtR(tooltip.valor)}</div>
-        </div>
-      )}
     </div>
   )
 }
@@ -202,8 +204,8 @@ function DrilldownPanel({ title, rows, open, onClose, color }) {
                   Nenhum título encontrado
                 </td>
               </tr>
-            ) : filtered.map((r, i) => (
-              <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+            ) : filtered.map(r => (
+              <tr key={`${r.CodRedCt}-${r.NrDoc}`} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                 <td className="px-3 py-2 text-slate-200">
                   {r.CodRedCt && (
                     <span
@@ -315,11 +317,11 @@ function LimiteCreditoTable({ rows }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => {
+            {rows.map(r => {
               const pct = r.pct_utilizado ?? 0
               const barColor = pct >= 90 ? '#ef4444' : pct >= 70 ? '#f59e0b' : '#22c55e'
               return (
-                <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                <tr key={r.CodRedCt} className="border-b border-slate-800/50 hover:bg-slate-800/30">
                   <td className="px-3 py-2 text-slate-200">
                     {r.CodRedCt && (
                       <span
@@ -349,7 +351,7 @@ function LimiteCreditoTable({ rows }) {
                         />
                       </div>
                       <span className="text-[10px]" style={{ color: barColor }}>
-                        {pct.toFixed(0)}%
+                        {pct.toFixed(1)}%
                       </span>
                     </div>
                   </td>

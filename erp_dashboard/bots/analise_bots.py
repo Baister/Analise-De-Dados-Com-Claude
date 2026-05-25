@@ -1347,15 +1347,12 @@ class BotFinanceiro(BaseBot):
         super().__init__("financeiro")
 
     def analisar(self) -> dict:  # noqa: C901
+        # Used only for TbCli.CodPlanoVndPadrao filter (credit limit query).
+        # vmCtRecDetalhe drill-downs use Receita = 'BOLETO' — CodPlanoVnd does not exist there.
         BOLETO_PADRAO_IN = ("'06','16','17','18','23','24','30',"
                             "'32','33','34','35','36','37','38','39',"
                             "'40','41','42','43','44','45','46','47',"
                             "'48','49','50','51','54'")
-
-        # ── Schema log (diagnostic) ──────────────────────────────────────
-        for _v in ["vmCtRecDetalhe", "vmCtRecRecebido"]:
-            _s = db.query(f"SELECT TOP 0 * FROM Blue.dbo.{_v} WITH (NOLOCK)")
-            logger.info("[Fin] %s cols: %s", _v, list(_s.columns))
 
         # ── Q1: Totais gerais (vmCtRecDetalhe — view already filters open) ─
         df_totais = db.query("""
@@ -1385,6 +1382,8 @@ class BotFinanceiro(BaseBot):
               AND DtQuitCtRec <  DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)
         """)
         if not df_recebido_raw.empty:
+            # NOTE: if vmCtRecRecebido is daily-aggregated (one row per day, not per title),
+            # len() counts days, not titles. Verify via log: each row should be one title.
             qtd_recebido_mes = int(len(df_recebido_raw))
             vlr_recebido_mes = float(df_recebido_raw["TotalRecebido"].fillna(0).sum())
         else:
