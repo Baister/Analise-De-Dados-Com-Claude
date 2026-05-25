@@ -296,12 +296,10 @@ function FocoSection({ title, stats, idVenc, idAven, openPanel, togglePanel, col
 
 // ── LimiteCreditoTable ────────────────────────────────────────────────────────
 function LimiteCreditoTable({ rows }) {
-  if (!rows?.length) return null
-
   return (
     <div className="bg-card border border-card_border rounded-lg p-4">
       <p className="text-[10px] text-subtext uppercase tracking-widest mb-3">
-        Limite de Crédito — Boleto ({rows.length})
+        Limite de Crédito — Clientes Boleto {rows?.length ? `(${rows.length})` : ''}
       </p>
       <div className="overflow-x-auto max-h-72 overflow-y-auto">
         <table className="w-full text-xs">
@@ -317,7 +315,13 @@ function LimiteCreditoTable({ rows }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map(r => {
+            {!rows?.length ? (
+              <tr>
+                <td colSpan={5} className="px-3 py-6 text-center text-slate-500 text-xs">
+                  Nenhum cliente com limite de crédito cadastrado para boleto
+                </td>
+              </tr>
+            ) : rows.map(r => {
               const pct = r.pct_utilizado ?? 0
               const barColor = pct >= 90 ? '#ef4444' : pct >= 70 ? '#f59e0b' : '#22c55e'
               return (
@@ -477,16 +481,29 @@ export default function Financeiro({ refreshTrigger }) {
         color="#f59e0b"
       />
 
-      {/* ── Foco Boleto ────────────────────────────────────────────────── */}
-      <FocoSection
-        title="🧾 Foco — Boleto"
-        stats={boleto}
-        idVenc="bol-venc"
-        idAven="bol-aven"
-        openPanel={openPanel}
-        togglePanel={togglePanel}
-        color="#3b82f6"
-      />
+      {/* ── Foco Boleto + Cartão — lado a lado ────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <FocoSection
+          title="🧾 Foco — Boleto"
+          stats={boleto}
+          idVenc="bol-venc"
+          idAven="bol-aven"
+          openPanel={openPanel}
+          togglePanel={togglePanel}
+          color="#3b82f6"
+        />
+        <FocoSection
+          title="💳 Foco — Cartão"
+          stats={cartao}
+          idVenc="car-venc"
+          idAven="car-aven"
+          openPanel={openPanel}
+          togglePanel={togglePanel}
+          color="#a855f7"
+        />
+      </div>
+
+      {/* ── Drill-downs Boleto ─────────────────────────────────────────── */}
       <DrilldownPanel
         title="🔴 Boleto — Títulos Vencidos"
         rows={bolVenc}
@@ -502,16 +519,7 @@ export default function Financeiro({ refreshTrigger }) {
         color="#3b82f6"
       />
 
-      {/* ── Foco Cartão ─────────────────────────────────────────────────── */}
-      <FocoSection
-        title="💳 Foco — Cartão"
-        stats={cartao}
-        idVenc="car-venc"
-        idAven="car-aven"
-        openPanel={openPanel}
-        togglePanel={togglePanel}
-        color="#a855f7"
-      />
+      {/* ── Drill-downs Cartão ─────────────────────────────────────────── */}
       <DrilldownPanel
         title="🔴 Cartão — Títulos Vencidos"
         rows={carVenc}
