@@ -1346,295 +1346,267 @@ class BotFinanceiro(BaseBot):
         super().__init__("financeiro")
 
     def analisar(self) -> dict:  # noqa: C901
-        # ── 1. Faturamento do dia (vmResumoDia) ──────────────────────────
-        df_dia = db.query("""
-            SELECT TOP 1
-                SUM(Valor) AS fat_dia,
-                CASE WHEN SUM(Qtde) > 0 THEN SUM(Valor) / SUM(Qtde) ELSE 0 END AS ticket_medio
-            FROM Blue.dbo.vmResumoDia WITH (NOLOCK)
-            WHERE Hoje = 'Vendas Hoje (A)'
-        """)
+        BOLETO_PADRAO_IN = ("'06','16','17','18','23','24','30',"
+                            "'32','33','34','35','36','37','38','39',"
+                            "'40','41','42','43','44','45','46','47',"
+                            "'48','49','50','51','54'")
 
-        # ── 2. Contas a Receber — resumo (vmCtRecResumo) ─────────────────
-        # Linhas com Vencendo = 'Atrasados' = inadimplentes; demais = a receber
-        df_cr_res = db.query("""
-            SELECT TOP 100
-                Vencendo,
-                CtReceber
-            FROM Blue.dbo.vmCtRecResumo WITH (NOLOCK)
-        """)
-        total_a_receber = 0.0
-        total_inadimplente = 0.0
-        if not df_cr_res.empty:
-            total_a_receber = float(df_cr_res["CtReceber"].sum())
-            mask_inad = df_cr_res["Vencendo"].str.strip().str.lower() == "atrasados"
-            total_inadimplente = float(df_cr_res.loc[mask_inad, "CtReceber"].sum())
+        # ── Schema log (diagnostic) ──────────────────────────────────────
+        for _v in ["vmCtRecDetalhe", "vmCtRecRecebido"]:
+            _s = db.query(f"SELECT TOP 0 * FROM Blue.dbo.{_v} WITH (NOLOCK)")
+            logger.info("[Fin] %s cols: %s", _v, list(_s.columns))
 
-        # ── 3. Contas a Pagar — resumo (vmCtPgResumo) ────────────────────
-        df_cp_res = db.query("""
-            SELECT TOP 100
-                Vencendo,
-                CtPagar
-            FROM Blue.dbo.vmCtPgResumo WITH (NOLOCK)
-        """)
-        total_a_pagar = 0.0
-        vencido_pagar = 0.0
-        if not df_cp_res.empty:
-            total_a_pagar = float(df_cp_res["CtPagar"].sum())
-            mask_pg_inad = df_cp_res["Vencendo"].str.strip().str.lower() == "atrasados"
-            vencido_pagar = float(df_cp_res.loc[mask_pg_inad, "CtPagar"].sum())
-
-        # ── Fluxo de caixa combinado (vmRecPagResumo) ────────────────────
-        # vmRecPagResumo é mantido para cobertura das 18 views; DiferencaRecPg é acumulado
-        # histórico — usamos o cálculo derivado (saldo corrente) como valor exibido
-        db.query("""
-            SELECT TOP 1 SUM(DiferencaRecPg) AS diferenca_rec_pg
-            FROM Blue.dbo.vmRecPagResumo WITH (NOLOCK)
-        """)
-        fluxo_caixa = round(total_a_receber - total_a_pagar, 2)
-
-        # ── 4. Índice de inadimplência (vmIndiceInadimplenciaGeral) ──────
-        df_inad_idx = db.query("""
-            SELECT TOP 1
-                SUM(TotalVencido) AS total_vencido,
-                SUM(TotalGeral)   AS total_geral,
-                CASE WHEN SUM(TotalGeral) > 0
-                     THEN SUM(TotalVencido) * 100.0 / SUM(TotalGeral)
-                     ELSE 0 END   AS PercInad
-            FROM Blue.dbo.vmIndiceInadimplenciaGeral WITH (NOLOCK)
-            WHERE Tipo = 'GERAL'
-              AND Mes >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
-        """)
-        indice_inadimplencia = round(_safe_float(df_inad_idx, "PercInad"), 2)
-
-        # ── 5. Receb. mês / hoje / semana (vmReceberPagarRegCaixa) ───────
-        df_caixa_rec = db.query("""
-            SELECT TOP 5000
-                Tipo,
-                TipoRcbo,
-                DtLcto,
-                DtQuitacao,
-                ValCtRec
-            FROM Blue.dbo.vmReceberPagarRegCaixa WITH (NOLOCK)
-            WHERE Tipo = 'R'
-              AND DtLcto >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
-        """)
-        recebido_mes = 0.0
-        rec_hoje = 0.0
-        rec_semana = 0.0
-        if not df_caixa_rec.empty:
-            df_caixa_rec["ValCtRec"] = df_caixa_rec["ValCtRec"].fillna(0)
-            df_caixa_rec["DtLcto"] = df_caixa_rec["DtLcto"].astype(str)
-            hoje_str = datetime.now().strftime("%Y-%m-%d")
-            recebido_mes = float(df_caixa_rec["ValCtRec"].sum())
-            rec_hoje = float(df_caixa_rec.loc[
-                df_caixa_rec["DtLcto"].str[:10] == hoje_str, "ValCtRec"
-            ].sum())
-            # semana = últimos 7 dias
-            try:
-                df_caixa_rec["DtLcto_dt"] = pd.to_datetime(df_caixa_rec["DtLcto"], errors="coerce")
-                semana_inicio = pd.Timestamp.now() - pd.Timedelta(days=6)
-                rec_semana = float(df_caixa_rec.loc[
-                    df_caixa_rec["DtLcto_dt"] >= semana_inicio, "ValCtRec"
-                ].sum())
-            except Exception:
-                rec_semana = 0.0
-
-        # ── 6. Por tipo de recebimento (vmReceberPagarRegCaixa) ───────────
-        df_tipo_rec = db.query("""
-            SELECT TOP 20
-                TipoRcbo                    AS TipoRecebimento,
-                SUM(ValCtRec)               AS valor,
-                COUNT(*)                    AS qtd_lancamentos
-            FROM Blue.dbo.vmReceberPagarRegCaixa WITH (NOLOCK)
-            WHERE Tipo = 'R'
-              AND DtLcto >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
-            GROUP BY TipoRcbo
-            ORDER BY valor DESC
-        """)
-
-        # ── 7. Aging receber 20d (vmCtRecVinte) ──────────────────────────
-        df_vinte = db.query("""
-            SELECT TOP 1
-                SUM(Total)   AS total_20d,
-                SUM(AVencer) AS a_vencer_20d,
-                SUM(De1a20)  AS de1a20
-            FROM Blue.dbo.vmCtRecVinte WITH (NOLOCK)
-        """)
-        a_vencer_20d = _safe_float(df_vinte, "a_vencer_20d")
-
-        # ── 8. Aging receber 30d (vmCtRecTrinta) ─────────────────────────
-        df_trinta = db.query("""
-            SELECT TOP 1
-                SUM(Total) AS total_30d
-            FROM Blue.dbo.vmCtRecTrinta WITH (NOLOCK)
-        """)
-        a_vencer_30d = _safe_float(df_trinta, "total_30d")
-
-        # ── 9. Aging pagar 20d (vmCtPgVinte) ─────────────────────────────
-        df_pg_vinte = db.query("""
-            SELECT TOP 1
-                SUM(Total) AS total_pg_20d
-            FROM Blue.dbo.vmCtPgVinte WITH (NOLOCK)
-        """)
-        a_vencer_pagar_20d = _safe_float(df_pg_vinte, "total_pg_20d")
-
-        # ── 10. Títulos a receber — detalhe (vmCtRecDetalhe) ─────────────
-        df_tit_rec = db.query("""
-            SELECT TOP 200
-                Documento        AS NrDoc,
-                NomeCli,
-                DtVencimento     AS DtVcto,
-                ''               AS Parcela,
-                Valor            AS VlrTitulo,
-                Receita          AS TipoRecebimento,
-                DATEDIFF(day, DtVencimento, GETDATE()) AS DiasAtraso,
-                Vencendo         AS Status
+        # ── Q1: Totais gerais (vmCtRecDetalhe — view already filters open) ─
+        df_totais = db.query("""
+            SELECT
+                COUNT(*) AS qtd_total_aberto,
+                COUNT(CASE WHEN Vencendo = 'Atrasados' THEN 1 END) AS qtd_vencidos,
+                COUNT(CASE WHEN Vencendo <> 'Atrasados' THEN 1 END) AS qtd_a_vencer,
+                SUM(CASE WHEN Vencendo = 'Atrasados' THEN Valor ELSE 0 END) AS vlr_vencidos,
+                SUM(CASE WHEN Vencendo <> 'Atrasados' THEN Valor ELSE 0 END) AS vlr_a_vencer
             FROM Blue.dbo.vmCtRecDetalhe WITH (NOLOCK)
-            ORDER BY DtVencimento ASC
+        """)
+        qtd_total_aberto = _safe_int(df_totais, "qtd_total_aberto")
+        qtd_vencidos     = _safe_int(df_totais, "qtd_vencidos")
+        qtd_a_vencer     = _safe_int(df_totais, "qtd_a_vencer")
+        vlr_vencidos     = _safe_float(df_totais, "vlr_vencidos")
+        vlr_a_vencer     = _safe_float(df_totais, "vlr_a_vencer")
+
+        # ── Q2: Recebidos no mês (vmCtRecRecebido) ───────────────────────
+        # vmCtRecRecebido is very large; fetch rows for current month with TOP
+        # to avoid aggregate-level timeout, then aggregate in pandas.
+        df_recebido_raw = db.query("""
+            SELECT TOP 5000
+                DtQuitCtRec,
+                TotalRecebido
+            FROM Blue.dbo.vmCtRecRecebido WITH (NOLOCK)
+            WHERE DtQuitCtRec >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+              AND DtQuitCtRec <  DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)
+        """)
+        if not df_recebido_raw.empty:
+            qtd_recebido_mes = int(len(df_recebido_raw))
+            vlr_recebido_mes = float(df_recebido_raw["TotalRecebido"].fillna(0).sum())
+        else:
+            qtd_recebido_mes = 0
+            vlr_recebido_mes = 0.0
+
+        # ── Q3: Bar chart — vencimentos por dia próximos 30d ────────────
+        df_venc30 = db.query("""
+            SELECT TOP 30
+                CAST(DtVencimento AS DATE) AS data_vcto,
+                COUNT(*) AS qtd_titulos,
+                SUM(Valor) AS valor_total
+            FROM Blue.dbo.vmCtRecDetalhe WITH (NOLOCK)
+            WHERE DtVencimento >= CAST(GETDATE() AS DATE)
+              AND DtVencimento <  DATEADD(day, 30, CAST(GETDATE() AS DATE))
+            GROUP BY CAST(DtVencimento AS DATE)
+            ORDER BY data_vcto ASC
+        """)
+        vencimentos_30d = []
+        if not df_venc30.empty:
+            for _, row in df_venc30.iterrows():
+                vencimentos_30d.append({
+                    "data":  str(row.get("data_vcto", ""))[:10],
+                    "qtd":   int(row.get("qtd_titulos", 0) or 0),
+                    "valor": float(row.get("valor_total", 0) or 0),
+                })
+
+        # ── Q4: Boleto stats ──────────────────────────────────────────────
+        df_bol_stats = db.query("""
+            SELECT
+                COUNT(*) AS qtd_total,
+                SUM(Valor) AS valor_total,
+                COUNT(CASE WHEN Vencendo = 'Atrasados' THEN 1 END) AS qtd_vencidos,
+                COUNT(CASE WHEN Vencendo <> 'Atrasados' THEN 1 END) AS qtd_a_vencer,
+                SUM(CASE WHEN Vencendo = 'Atrasados' THEN Valor ELSE 0 END) AS vlr_vencidos,
+                SUM(CASE WHEN Vencendo <> 'Atrasados' THEN Valor ELSE 0 END) AS vlr_a_vencer
+            FROM Blue.dbo.vmCtRecDetalhe WITH (NOLOCK)
+            WHERE Receita = 'BOLETO'
         """)
 
-        # ── 11. Top inadimplentes (vmClientesComDebito) ───────────────────
-        df_inad = db.query("""
-            SELECT TOP 50
-                CodRedCt                                        AS CodCli,
-                COALESCE(NomeFantCli, RzsCli, '')               AS NomeCli,
-                QtdTit                                          AS QtdTitulos,
-                TotalDebitoAtualiz                              AS VlrTotal,
-                VencMaisAntigo                                  AS DtVenctoMaisAntigo,
-                DiasVcto                                        AS DiasAtraso
-            FROM Blue.dbo.vmClientesComDebito WITH (NOLOCK)
-            ORDER BY TotalDebitoAtualiz DESC
+        # ── Q5: Cartão stats ──────────────────────────────────────────────
+        df_car_stats = db.query("""
+            SELECT
+                COUNT(*) AS qtd_total,
+                SUM(Valor) AS valor_total,
+                COUNT(CASE WHEN Vencendo = 'Atrasados' THEN 1 END) AS qtd_vencidos,
+                COUNT(CASE WHEN Vencendo <> 'Atrasados' THEN 1 END) AS qtd_a_vencer,
+                SUM(CASE WHEN Vencendo = 'Atrasados' THEN Valor ELSE 0 END) AS vlr_vencidos,
+                SUM(CASE WHEN Vencendo <> 'Atrasados' THEN Valor ELSE 0 END) AS vlr_a_vencer
+            FROM Blue.dbo.vmCtRecDetalhe WITH (NOLOCK)
+            WHERE Receita = 'CARTAO DE CREDITO'
         """)
 
-        # ── 12. Qtd títulos inadimplentes ─────────────────────────────────
-        df_qtd_inad = db.query("""
-            SELECT TOP 1
-                SUM(QtdTit) AS qtd_titulos_vencidos
-            FROM Blue.dbo.vmClientesComDebito WITH (NOLOCK)
-        """)
-        qtd_inadimplentes = _safe_int(df_qtd_inad, "qtd_titulos_vencidos")
-
-        # ── 13. Títulos a pagar — detalhe (vmCtPgDetalhe) ────────────────
-        df_tit_pg = db.query("""
+        # ── Q6: Drill-down Boleto Vencidos ────────────────────────────────
+        df_bol_venc = db.query("""
             SELECT TOP 200
-                Documento        AS NrDoc,
-                NomeFornec       AS NomeForn,
-                DtVencimento     AS DtVcto,
-                ''               AS Parcela,
-                Valor            AS VlrTitulo,
-                Despesa          AS TipoPagto,
-                DATEDIFF(day, DtVencimento, GETDATE()) AS DiasAtraso,
-                Vencendo         AS Status
-            FROM Blue.dbo.vmCtPgDetalhe WITH (NOLOCK)
-            ORDER BY DtVencimento ASC
+                ISNULL(c.CodRedCt, '') AS CodRedCt,
+                d.NomeCli,
+                d.Documento AS NrDoc,
+                d.Valor AS VlrTitulo,
+                d.DtVencimento AS DtVcto,
+                DATEDIFF(day, d.DtVencimento, GETDATE()) AS dias_atraso
+            FROM Blue.dbo.vmCtRecDetalhe d WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON d.CodCli = c.CodRedCt
+            WHERE d.Receita = 'BOLETO'
+              AND d.Vencendo = 'Atrasados'
+            ORDER BY dias_atraso DESC
         """)
 
-        # ── 14. Movimento financeiro (vwMovFinanc, 30 dias) ───────────────
-        df_mov = db.query("""
-            SELECT TOP 500
-                [DtLctoMovFinanc__Data]               AS DtMov,
-                [Tipo__Tipo_XXX]                      AS TipoMov,
-                [ValMovFinanc__Valor_Vlr$]            AS ValMov,
-                [HistMovFinanc__Histórico]       AS Descricao
-            FROM Blue.dbo.vwMovFinanc WITH (NOLOCK)
-            WHERE [DtLctoMovFinanc__Data] >= DATEADD(day, -30, GETDATE())
-            ORDER BY [DtLctoMovFinanc__Data] DESC
-        """)
-        if df_mov.empty:
-            # fallback: without date filter (view may use computed columns)
-            df_mov = db.query("""
-                SELECT TOP 100
-                    [DtLctoMovFinanc__Data]               AS DtMov,
-                    [Tipo__Tipo_XXX]                      AS TipoMov,
-                    [ValMovFinanc__Valor_Vlr$]            AS ValMov,
-                    [HistMovFinanc__Histórico]       AS Descricao
-                FROM Blue.dbo.vwMovFinanc WITH (NOLOCK)
-                ORDER BY [DtLctoMovFinanc__Data] DESC
-            """)
-
-        # ── 15. Movimento por centro de custo (vwMovFinancCentroCusto) ───
-        df_cc = db.query("""
+        # ── Q7: Drill-down Boleto A Vencer ────────────────────────────────
+        df_bol_aven = db.query("""
             SELECT TOP 200
-                CAST(CodCentroCusto AS VARCHAR(20)) AS CentroCusto,
-                SUM(CASE WHEN ValMovFinanc > 0 THEN ValMovFinanc ELSE 0 END) AS ValEntrada,
-                SUM(CASE WHEN ValMovFinanc < 0 THEN ABS(ValMovFinanc) ELSE 0 END) AS ValSaida
-            FROM Blue.dbo.vwMovFinancCentroCusto WITH (NOLOCK)
-            WHERE DtLctoMovFinanc >= DATEADD(day, -30, GETDATE())
-              AND CodCentroCusto IS NOT NULL
-            GROUP BY CodCentroCusto
-            ORDER BY ValEntrada DESC
+                ISNULL(c.CodRedCt, '') AS CodRedCt,
+                d.NomeCli,
+                d.Documento AS NrDoc,
+                d.Valor AS VlrTitulo,
+                d.DtVencimento AS DtVcto,
+                DATEDIFF(day, GETDATE(), d.DtVencimento) AS dias_faltando
+            FROM Blue.dbo.vmCtRecDetalhe d WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON d.CodCli = c.CodRedCt
+            WHERE d.Receita = 'BOLETO'
+              AND d.Vencendo <> 'Atrasados'
+            ORDER BY d.DtVencimento ASC
         """)
 
-        # ── 16. Monitor NF-e (vwMonitorNFE) ──────────────────────────────
-        df_nfe = db.query("""
+        # ── Q8: Drill-down Cartão Vencidos ────────────────────────────────
+        df_car_venc = db.query("""
+            SELECT TOP 200
+                ISNULL(c.CodRedCt, '') AS CodRedCt,
+                d.NomeCli,
+                d.Documento AS NrDoc,
+                d.Valor AS VlrTitulo,
+                d.DtVencimento AS DtVcto,
+                DATEDIFF(day, d.DtVencimento, GETDATE()) AS dias_atraso
+            FROM Blue.dbo.vmCtRecDetalhe d WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON d.CodCli = c.CodRedCt
+            WHERE d.Receita = 'CARTAO DE CREDITO'
+              AND d.Vencendo = 'Atrasados'
+            ORDER BY dias_atraso DESC
+        """)
+
+        # ── Q9: Drill-down Cartão A Vencer ────────────────────────────────
+        df_car_aven = db.query("""
+            SELECT TOP 200
+                ISNULL(c.CodRedCt, '') AS CodRedCt,
+                d.NomeCli,
+                d.Documento AS NrDoc,
+                d.Valor AS VlrTitulo,
+                d.DtVencimento AS DtVcto,
+                DATEDIFF(day, GETDATE(), d.DtVencimento) AS dias_faltando
+            FROM Blue.dbo.vmCtRecDetalhe d WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON d.CodCli = c.CodRedCt
+            WHERE d.Receita = 'CARTAO DE CREDITO'
+              AND d.Vencendo <> 'Atrasados'
+            ORDER BY d.DtVencimento ASC
+        """)
+
+        # ── Q10: Drill-down Hoje (todos os tipos) ─────────────────────────
+        df_hoje = db.query("""
+            SELECT TOP 200
+                ISNULL(c.CodRedCt, '') AS CodRedCt,
+                d.NomeCli,
+                d.Documento AS NrDoc,
+                d.Valor AS VlrTitulo,
+                d.DtVencimento AS DtVcto,
+                0 AS dias_faltando
+            FROM Blue.dbo.vmCtRecDetalhe d WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON d.CodCli = c.CodRedCt
+            WHERE d.Vencendo = 'Hoje'
+            ORDER BY d.Valor DESC
+        """)
+
+        # ── Q11: Limite de crédito boleto ─────────────────────────────────
+        df_limite = db.query(f"""
             SELECT TOP 100
-                NrNotaFiscal        AS NrNFE,
-                DtEmis              AS DtEmissao,
-                RazaoSocial         AS NomeDest,
-                total               AS ValNFE,
-                situacao            AS Status
-            FROM Blue.dbo.vwMonitorNFE WITH (NOLOCK)
-            WHERE DtEmis >= DATEADD(day, -7, GETDATE())
-            ORDER BY DtEmis DESC
+                c.CodRedCt,
+                c.NomeFantCli,
+                l.ValLimCred1 AS limite_credito,
+                ISNULL(SUM(d.Valor), 0) AS utilizado
+            FROM Blue.dbo.TbCli c WITH (NOLOCK)
+            JOIN Blue.dbo.TbLimCredCli l WITH (NOLOCK)
+                ON c.CodLimCredCli = l.CodLimCredCli
+            LEFT JOIN Blue.dbo.vmCtRecDetalhe d WITH (NOLOCK)
+                ON d.CodCli = c.CodRedCt
+                AND d.Receita = 'BOLETO'
+            WHERE c.StatusCli = '0'
+              AND l.ValLimCred1 > 0
+              AND c.CodPlanoVndPadrao IN ({BOLETO_PADRAO_IN})
+            GROUP BY c.CodRedCt, c.NomeFantCli, l.ValLimCred1
+            ORDER BY ISNULL(SUM(d.Valor), 0) / l.ValLimCred1 DESC
         """)
 
-        # ── 17. Pedidos confirmados (vmPainelPedidoVndConf) ───────────────
-        df_ped = db.query("""
-            SELECT TOP 100
-                NrOrcPedVnd             AS NrPed,
-                NomeFantCli             AS NomeCli,
-                0.0                     AS ValPed,
-                DtOrcPedVnd             AS DtPed,
-                StatusOrcPedConsig      AS Status
-            FROM Blue.dbo.vmPainelPedidoVndConf WITH (NOLOCK)
-            ORDER BY DtOrcPedVnd DESC
-        """)
+        # ── Helper functions ──────────────────────────────────────────────
+        def _stats(df):
+            return {
+                "qtd_total":    _safe_int(df, "qtd_total"),
+                "valor_total":  round(_safe_float(df, "valor_total"), 2),
+                "qtd_vencidos": _safe_int(df, "qtd_vencidos"),
+                "qtd_a_vencer": _safe_int(df, "qtd_a_vencer"),
+                "vlr_vencidos": round(_safe_float(df, "vlr_vencidos"), 2),
+                "vlr_a_vencer": round(_safe_float(df, "vlr_a_vencer"), 2),
+            }
 
-        # ── 18. Caixa rec/pag geral (vmReceberPagarRegCaixa, 30 dias) ────
-        df_rp_caixa = db.query("""
-            SELECT TOP 500
-                Tipo            AS TipoMov,
-                TipoRcbo,
-                DtLcto          AS DtMov,
-                ValCtRec        AS ValMov
-            FROM Blue.dbo.vmReceberPagarRegCaixa WITH (NOLOCK)
-            WHERE DtLcto >= DATEADD(day, -30, GETDATE())
-            ORDER BY DtLcto DESC
-        """)
+        def _drill(df):
+            import math
+            if df.empty:
+                return []
+            rows = []
+            for _, r in df.iterrows():
+                atraso   = r.get("dias_atraso")
+                faltando = r.get("dias_faltando")
+                if atraso is not None and not (isinstance(atraso, float) and math.isnan(atraso)):
+                    dias = int(atraso)
+                elif faltando is not None and not (isinstance(faltando, float) and math.isnan(faltando)):
+                    dias = -int(faltando)
+                else:
+                    dias = 0
+                rows.append({
+                    "CodRedCt":  str(r.get("CodRedCt") or ""),
+                    "NomeCli":   str(r.get("NomeCli") or ""),
+                    "NrDoc":     str(r.get("NrDoc") or ""),
+                    "VlrTitulo": float(r.get("VlrTitulo") or 0),
+                    "DtVcto":    str(r.get("DtVcto") or "")[:10],
+                    "dias":      dias,
+                })
+            return rows
 
-        # ── Montar resultado ──────────────────────────────────────────────
+        limite_lista = []
+        if not df_limite.empty:
+            for _, r in df_limite.iterrows():
+                lim  = float(r.get("limite_credito") or 0)
+                util = float(r.get("utilizado") or 0)
+                pct  = round(util / lim * 100, 1) if lim > 0 else 0.0
+                limite_lista.append({
+                    "CodRedCt":       str(r.get("CodRedCt") or ""),
+                    "NomeFantCli":    str(r.get("NomeFantCli") or ""),
+                    "limite_credito": lim,
+                    "utilizado":      round(util, 2),
+                    "livre":          round(max(lim - util, 0), 2),
+                    "pct_utilizado":  pct,
+                })
+
+        # ── Return dict ───────────────────────────────────────────────────
         return {
-            # KPI row
-            "fat_dia":              _safe_float(df_dia, "fat_dia"),
-            "ticket_medio":         _safe_float(df_dia, "ticket_medio"),
-            "total_a_receber":      total_a_receber,
-            "total_a_pagar":        total_a_pagar,
-            "fluxo_caixa":          round(fluxo_caixa, 2),
-            "recebido_mes":         round(recebido_mes, 2),
-            "total_inadimplente":   round(total_inadimplente, 2),
-            "qtd_inadimplentes":    qtd_inadimplentes,
-            "indice_inadimplencia": indice_inadimplencia,
-            # Contas a Receber
-            "por_tipo_recebimento": df_tipo_rec.to_dict("records") if not df_tipo_rec.empty else [],
-            "rec_hoje":             round(rec_hoje, 2),
-            "rec_semana":           round(rec_semana, 2),
-            "a_vencer_20d":         round(a_vencer_20d, 2),
-            "a_vencer_30d":         round(a_vencer_30d, 2),
-            "titulos_lista":        df_tit_rec.to_dict("records") if not df_tit_rec.empty else [],
-            "top_inadimplentes":    df_inad.to_dict("records") if not df_inad.empty else [],
-            # Contas a Pagar
-            "vencido_pagar":        round(vencido_pagar, 2),
-            "a_vencer_pagar_20d":   round(a_vencer_pagar_20d, 2),
-            "titulos_pagar_lista":  df_tit_pg.to_dict("records") if not df_tit_pg.empty else [],
-            # Movimento Financeiro
-            "mov_financeiro":       df_mov.to_dict("records") if not df_mov.empty else [],
-            "mov_centro_custo":     df_cc.to_dict("records") if not df_cc.empty else [],
-            "nfe_monitor":          df_nfe.to_dict("records") if not df_nfe.empty else [],
-            "pedidos_conf":         df_ped.to_dict("records") if not df_ped.empty else [],
-            "rec_pag_caixa":        df_rp_caixa.to_dict("records") if not df_rp_caixa.empty else [],
-            # Meta
-            "ultimo_update":        datetime.now().strftime("%H:%M:%S"),
+            "qtd_total_aberto":  qtd_total_aberto,
+            "qtd_vencidos":      qtd_vencidos,
+            "qtd_a_vencer":      qtd_a_vencer,
+            "qtd_recebido_mes":  qtd_recebido_mes,
+            "donut_status": [
+                {"status": "Concluido", "qtd": qtd_recebido_mes, "valor": round(vlr_recebido_mes, 2)},
+                {"status": "AVencer",   "qtd": qtd_a_vencer,     "valor": round(vlr_a_vencer, 2)},
+                {"status": "Vencido",   "qtd": qtd_vencidos,     "valor": round(vlr_vencidos, 2)},
+            ],
+            "vencimentos_30d": vencimentos_30d,
+            "boleto":         _stats(df_bol_stats),
+            "cartao":         _stats(df_car_stats),
+            "bol_vencidos":   _drill(df_bol_venc),
+            "bol_a_vencer":   _drill(df_bol_aven),
+            "car_vencidos":   _drill(df_car_venc),
+            "car_a_vencer":   _drill(df_car_aven),
+            "hoje_vencidos":  _drill(df_hoje),
+            "limite_credito": limite_lista,
+            "ultimo_update":  datetime.now().strftime("%H:%M:%S"),
         }
 
     def analisar_filtrado(self, filtros: dict) -> dict:
