@@ -1,381 +1,533 @@
-import { useState, useMemo } from 'react';
-import { useFilteredDados } from '../hooks/useApi';
-import KpiCard from '../components/KpiCard';
-import DataTable from '../components/DataTable';
-import PieChart from '../charts/PieChart';
-import BarChart from '../charts/BarChart';
-import { brl, shortBrl, fmtDate } from '../utils/format';
+import { useState, useMemo } from 'react'
+import { useFilteredDados } from '../hooks/useApi'
+import KpiCard from '../components/KpiCard'
+import { brl, fmtDate } from '../utils/format'
 
-// ---------------------------------------------------------------------------
-// Status badge
-// ---------------------------------------------------------------------------
-const STATUS_STYLE = {
-  Vencido:  'bg-red-900/40 text-red-400 border border-red-800',
-  Pendente: 'bg-blue-900/40 text-blue-400 border border-blue-800',
-  Pago:     'bg-green-900/40 text-green-400 border border-green-800',
-};
-const StatusBadge = ({ status }) => (
-  <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${STATUS_STYLE[status] ?? 'bg-gray-800 text-subtext'}`}>
-    {status ?? '—'}
-  </span>
-);
+// ── Formatters ──────────────────────────────────────────────────────────────
+const fmtR = v =>
+  v == null ? '—' : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
-// ---------------------------------------------------------------------------
-// Column definitions
-// ---------------------------------------------------------------------------
-const TITULOS_CR_COLS = [
-  { key: 'NrDoc',           label: 'Doc' },
-  { key: 'NomeCli',         label: 'Cliente' },
-  { key: 'DtVcto',          label: 'Vencimento',  render: v => fmtDate(v) },
-  { key: 'Parcela',         label: 'Parcela' },
-  { key: 'VlrTitulo',       label: 'Valor',        render: v => brl(v) },
-  { key: 'TipoRecebimento', label: 'Tipo' },
-  { key: 'DiasAtraso',      label: 'Atraso',       render: v => String(v ?? 0) },
-  { key: 'Status',          label: 'Status',       render: v => <StatusBadge status={v} /> },
-];
+// ── DonutChart (SVG pure) ───────────────────────────────────────────────────
+const DONUT_COLORS = { Concluido: '#22c55e', AVencer: '#3b82f6', Vencido: '#ef4444' }
+const DONUT_LABELS = { Concluido: 'Concluído', AVencer: 'A Vencer', Vencido: 'Vencido' }
+const CIRC = 2 * Math.PI * 40  // r=40
 
-const INAD_COLS = [
-  { key: 'CodCli',             label: 'Cód.' },
-  { key: 'NomeCli',            label: 'Cliente' },
-  { key: 'QtdTitulos',         label: 'Títulos',         render: v => String(v ?? 0) },
-  { key: 'VlrTotal',           label: 'Valor Total',     render: v => brl(v) },
-  { key: 'DtVenctoMaisAntigo', label: 'Vencto Antigo',   render: v => fmtDate(v) },
-  { key: 'DiasAtraso',         label: 'Dias Atraso',     render: v => String(v ?? 0) },
-];
+function DonutChart({ data }) {
+  const total = data.reduce((s, d) => s + (d.qtd || 0), 0)
+  if (!total) return (
+    <p className="text-subtext text-sm text-center mt-4">Sem dados</p>
+  )
 
-const TITULOS_CP_COLS = [
-  { key: 'NrDoc',      label: 'Doc' },
-  { key: 'NomeForn',   label: 'Fornecedor' },
-  { key: 'DtVcto',     label: 'Vencimento', render: v => fmtDate(v) },
-  { key: 'Parcela',    label: 'Parcela' },
-  { key: 'VlrTitulo',  label: 'Valor',      render: v => brl(v) },
-  { key: 'TipoPagto',  label: 'Tipo' },
-  { key: 'DiasAtraso', label: 'Atraso',     render: v => String(v ?? 0) },
-  { key: 'Status',     label: 'Status',     render: v => <StatusBadge status={v} /> },
-];
+  let offset = 0
+  const slices = data.map(d => {
+    const len = (d.qtd / total) * CIRC
+    const s = { ...d, len, offset }
+    offset += len
+    return s
+  })
 
-const NFE_COLS = [
-  { key: 'NrNFE',     label: 'NF-e' },
-  { key: 'DtEmissao', label: 'Emissão',      render: v => fmtDate(v) },
-  { key: 'NomeDest',  label: 'Destinatário' },
-  { key: 'ValNFE',    label: 'Valor',         render: v => brl(v) },
-  { key: 'Status',    label: 'Status',        render: v => <StatusBadge status={v} /> },
-];
-
-const PEDIDOS_COLS = [
-  { key: 'NrPed',   label: 'Pedido' },
-  { key: 'NomeCli', label: 'Cliente' },
-  { key: 'DtPed',   label: 'Data',   render: v => fmtDate(v) },
-  { key: 'Status',  label: 'Status', render: v => <StatusBadge status={v} /> },
-];
-
-const MOV_CC_COLS = [
-  { key: 'CentroCusto', label: 'Centro de Custo' },
-  { key: 'ValEntrada',  label: 'Entrada', render: v => brl(v) },
-  { key: 'ValSaida',    label: 'Saída',   render: v => brl(v) },
-];
-
-// ---------------------------------------------------------------------------
-// Helper — aggregate mov_financeiro into Entrada/Saída per date
-// ---------------------------------------------------------------------------
-function buildMovChart(movFinanceiro) {
-  const byDate = {};
-  for (const m of movFinanceiro) {
-    const dt = m.DtMov ? String(m.DtMov).slice(0, 10) : null;
-    if (!dt || dt === 'null') continue;
-    if (!byDate[dt]) byDate[dt] = { data: dt, Entrada: 0, Saída: 0 };
-    const val = Number(m.ValMov) || 0;
-    const tipo = String(m.TipoMov ?? '').toLowerCase();
-    if (tipo.includes('entrada') || tipo.includes('receb') || tipo === 'e' || tipo === 'r') {
-      byDate[dt].Entrada += val;
-    } else if (tipo.includes('saida') || tipo.includes('saída') || tipo.includes('pag') || tipo.includes('desp') || tipo === 's' || tipo === 'p') {
-      byDate[dt].Saída += val;
-    }
-  }
-  return Object.values(byDate).sort((a, b) => a.data.localeCompare(b.data)).slice(-14);
+  return (
+    <div className="flex gap-4 items-center">
+      <svg width="100" height="100" viewBox="0 0 100 100" style={{ flexShrink: 0 }}>
+        {slices.map(s => (
+          <circle
+            key={s.status}
+            cx="50" cy="50" r="40"
+            fill="none"
+            stroke={DONUT_COLORS[s.status] || '#64748b'}
+            strokeWidth="16"
+            strokeDasharray={`${s.len} ${CIRC - s.len}`}
+            strokeDashoffset={-s.offset}
+            style={{ transform: 'rotate(-90deg)', transformOrigin: '50px 50px' }}
+          />
+        ))}
+        <circle cx="50" cy="50" r="32" fill="#1e293b" />
+        <text x="50" y="54" textAnchor="middle" fill="#e2e8f0" fontSize="14" fontWeight="bold">
+          {total}
+        </text>
+      </svg>
+      <div className="flex flex-col gap-2 flex-1">
+        {data.map(d => (
+          <div key={d.status} className="flex items-center gap-2">
+            <span
+              className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
+              style={{ background: DONUT_COLORS[d.status] || '#64748b' }}
+            />
+            <span className="text-[11px] text-subtext flex-1">
+              {DONUT_LABELS[d.status] || d.status}
+            </span>
+            <span
+              className="text-sm font-bold"
+              style={{ color: DONUT_COLORS[d.status] || '#e2e8f0' }}
+            >
+              {d.qtd ?? 0}
+            </span>
+            <span className="text-[10px] text-subtext ml-1">{fmtR(d.valor)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 }
 
-// ---------------------------------------------------------------------------
-// Sub-tab button
-// ---------------------------------------------------------------------------
-const TAB_ACTIVE   = 'border-b-2 border-accent_blue text-accent_blue font-semibold';
-const TAB_INACTIVE = 'border-b-2 border-transparent text-subtext hover:text-text_main';
+// ── VencimentosBarChart ──────────────────────────────────────────────────────
+function VencimentosBarChart({ bars, onTodayClick }) {
+  const [tooltip, setTooltip] = useState(null)
 
-const TabBtn = ({ label, active, onClick }) => (
-  <button
-    onClick={onClick}
-    className={`px-4 py-2 text-sm transition-colors ${active ? TAB_ACTIVE : TAB_INACTIVE}`}
-  >
-    {label}
-  </button>
-);
+  if (!bars?.length) return (
+    <p className="text-subtext text-sm text-center mt-6">
+      Sem vencimentos nos próximos 30 dias
+    </p>
+  )
 
-// ---------------------------------------------------------------------------
-// Main component
-// ---------------------------------------------------------------------------
-export default function Financeiro({ refreshTrigger }) {
-  const { data, loading, error, isEmpty } = useFilteredDados('financeiro', {}, refreshTrigger);
-  const [activeTab, setActiveTab] = useState('receber');
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const maxQtd = Math.max(...bars.map(b => b.qtd || 0), 1)
 
-  // All derived state before early returns (Rules of Hooks)
-  const fat_dia              = data?.fat_dia              ?? 0;
-  const ticket_medio         = data?.ticket_medio         ?? 0;
-  const total_a_receber      = data?.total_a_receber      ?? 0;
-  const total_a_pagar        = data?.total_a_pagar        ?? 0;
-  const fluxo_caixa          = data?.fluxo_caixa          ?? 0;
-  const recebido_mes         = data?.recebido_mes         ?? 0;
-  const total_inadimplente   = data?.total_inadimplente   ?? 0;
-  const qtd_inadimplentes    = data?.qtd_inadimplentes    ?? 0;
-  const indice_inadimplencia = data?.indice_inadimplencia ?? 0;
-  const rec_hoje             = data?.rec_hoje             ?? 0;
-  const rec_semana           = data?.rec_semana           ?? 0;
-  const a_vencer_20d         = data?.a_vencer_20d         ?? 0;
-  const a_vencer_30d         = data?.a_vencer_30d         ?? 0;
-  const vencido_pagar        = data?.vencido_pagar        ?? 0;
-  const a_vencer_pagar_20d   = data?.a_vencer_pagar_20d   ?? 0;
-
-  const inadimplentes = data?.top_inadimplentes    ?? [];
-  const porTipo       = data?.por_tipo_recebimento ?? [];
-  const titulosCR     = data?.titulos_lista        ?? [];
-  const titulosCP     = data?.titulos_pagar_lista  ?? [];
-  const movFinanceiro = data?.mov_financeiro        ?? [];
-  const movCC         = data?.mov_centro_custo      ?? [];
-  const nfeList       = data?.nfe_monitor           ?? [];
-  const pedidosList   = data?.pedidos_conf          ?? [];
-
-  const movChartData = useMemo(() => buildMovChart(movFinanceiro), [movFinanceiro]);
-  const topInad      = inadimplentes[0] ?? null;
-
-  if (loading && !data) {
-    return (
-      <div className="flex items-center justify-center h-64 text-subtext text-sm">
-        Carregando dados financeiros…
+  return (
+    <div className="relative">
+      <div className="flex items-end gap-1" style={{ height: 80 }}>
+        {bars.map(b => {
+          const isToday = b.data === todayStr
+          const h = Math.max(Math.round((b.qtd / maxQtd) * 72), 3)
+          const color = isToday ? '#f59e0b' : '#3b82f6'
+          return (
+            <div
+              key={b.data}
+              className="flex-1 flex flex-col items-center justify-end cursor-pointer relative"
+              style={{ height: '100%' }}
+              onClick={isToday ? onTodayClick : undefined}
+              onMouseEnter={() => setTooltip(b)}
+              onMouseLeave={() => setTooltip(null)}
+              title={isToday ? 'Clique para ver clientes com vencimento hoje' : undefined}
+            >
+              <div
+                style={{
+                  height: h,
+                  background: color,
+                  width: '100%',
+                  borderRadius: '3px 3px 0 0',
+                  opacity: isToday ? 1 : 0.7,
+                }}
+              />
+            </div>
+          )
+        })}
       </div>
-    );
-  }
-  if (error && !data) {
-    return (
-      <div className="flex items-center justify-center h-64 text-accent_red text-sm">
-        Erro ao carregar dados: {error}
+      {/* X-axis labels */}
+      <div className="flex mt-1" style={{ gap: '4px' }}>
+        {bars.map((b, i) => {
+          const show = i === 0 || i === Math.floor(bars.length / 2) || i === bars.length - 1
+          const parts = b.data.split('-')
+          return (
+            <div
+              key={b.data}
+              className="flex-1 text-center"
+              style={{ fontSize: 9, color: '#475569' }}
+            >
+              {show && parts.length === 3 ? `${parts[2]}/${parts[1]}` : ''}
+            </div>
+          )
+        })}
       </div>
-    );
-  }
-  if (isEmpty) {
-    return (
-      <div className="flex items-center justify-center h-64 text-subtext text-sm">
-        <div className="text-center space-y-1">
-          <p>Bot Financeiro está processando dados…</p>
-          <p className="text-xs opacity-60">A página atualiza automaticamente quando concluir.</p>
+      {/* Tooltip */}
+      {tooltip && (
+        <div
+          className="absolute bg-slate-800 border border-slate-600 rounded px-2 py-1 text-xs text-white pointer-events-none z-10"
+          style={{ bottom: '110%', left: '50%', transform: 'translateX(-50%)', whiteSpace: 'nowrap' }}
+        >
+          <div className="font-medium">{tooltip.data?.slice(5).replace('-', '/')}</div>
+          <div>{tooltip.qtd} título{tooltip.qtd !== 1 ? 's' : ''}</div>
+          <div>{fmtR(tooltip.valor)}</div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ── DrilldownPanel ───────────────────────────────────────────────────────────
+function DrilldownPanel({ title, rows, open, onClose, color }) {
+  const [filter, setFilter] = useState('')
+
+  const filtered = useMemo(() => {
+    if (!filter.trim()) return rows
+    const q = filter.toLowerCase()
+    return rows.filter(r =>
+      `${r.CodRedCt} ${r.NomeCli}`.toLowerCase().includes(q)
+    )
+  }, [rows, filter])
+
+  if (!open) return null
+
+  return (
+    <div
+      className="border rounded-lg overflow-hidden"
+      style={{ borderColor: color, background: '#0f172a' }}
+    >
+      <div
+        className="flex items-center justify-between px-4 py-2"
+        style={{ background: color + '18' }}
+      >
+        <span className="text-sm font-semibold" style={{ color }}>{title}</span>
+        <button
+          onClick={onClose}
+          className="text-subtext text-xs hover:text-text_main transition-colors"
+        >
+          ✕ fechar
+        </button>
       </div>
-    );
-  }
+      <div className="px-4 py-2 border-b border-slate-800">
+        <input
+          type="text"
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          placeholder="Filtrar por código ou nome do cliente…"
+          className="w-full bg-slate-900 border border-slate-700 rounded px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-blue-500 placeholder-slate-500"
+        />
+      </div>
+      <div className="overflow-x-auto max-h-80 overflow-y-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-slate-800">
+              <th className="px-3 py-2 text-left text-slate-400 font-semibold">Cód. · Cliente</th>
+              <th className="px-3 py-2 text-left text-slate-400 font-semibold">Nº Título</th>
+              <th className="px-3 py-2 text-right text-slate-400 font-semibold">Valor</th>
+              <th className="px-3 py-2 text-left text-slate-400 font-semibold">Vencimento</th>
+              <th className="px-3 py-2 text-right text-slate-400 font-semibold">Falta/Atraso</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-3 py-4 text-center text-slate-500">
+                  Nenhum título encontrado
+                </td>
+              </tr>
+            ) : filtered.map((r, i) => (
+              <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                <td className="px-3 py-2 text-slate-200">
+                  {r.CodRedCt && (
+                    <span
+                      className="inline-block text-[9px] font-bold bg-slate-900 text-slate-400 px-1.5 py-0.5 rounded mr-1.5"
+                      style={{ border: '1px solid #334155' }}
+                    >
+                      {r.CodRedCt}
+                    </span>
+                  )}
+                  {r.NomeCli}
+                </td>
+                <td className="px-3 py-2 text-slate-300">{r.NrDoc}</td>
+                <td className="px-3 py-2 text-right text-slate-200 font-medium">
+                  {fmtR(r.VlrTitulo)}
+                </td>
+                <td className="px-3 py-2 text-slate-300">{fmtDate(r.DtVcto)}</td>
+                <td className="px-3 py-2 text-right">
+                  <span style={{
+                    color: r.dias > 0 ? '#f87171' : r.dias < 0 ? '#60a5fa' : '#fbbf24'
+                  }}>
+                    {r.dias > 0
+                      ? `${r.dias}d atraso`
+                      : r.dias < 0
+                        ? `${-r.dias}d restantes`
+                        : 'hoje'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ── StatChip ─────────────────────────────────────────────────────────────────
+function StatChip({ label, value, color }) {
+  return (
+    <div className="bg-slate-900 rounded-lg px-3 py-2 flex flex-col">
+      <span className="text-[9px] text-slate-500 uppercase tracking-wider mb-0.5">{label}</span>
+      <span className="text-sm font-bold" style={{ color: color || '#e2e8f0' }}>{value}</span>
+    </div>
+  )
+}
+
+// ── FocoSection ───────────────────────────────────────────────────────────────
+function FocoSection({ title, stats, idVenc, idAven, openPanel, togglePanel, color }) {
+  const isVencOpen = openPanel === idVenc
+  const isAvenOpen = openPanel === idAven
+
+  return (
+    <div className="bg-card border border-card_border rounded-lg p-4 space-y-3">
+      <p className="text-[10px] text-subtext uppercase tracking-widest">{title}</p>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <StatChip label="Total Títulos" value={stats.qtd_total ?? 0}    color="#e2e8f0" />
+        <StatChip label="Valor Total"   value={fmtR(stats.valor_total)} color={color}  />
+        <StatChip label="Vencidos"      value={stats.qtd_vencidos ?? 0} color="#f87171" />
+        <StatChip label="A Vencer"      value={stats.qtd_a_vencer ?? 0} color="#60a5fa" />
+      </div>
+      <div className="flex gap-3">
+        <button
+          onClick={() => togglePanel(idVenc)}
+          className="flex-1 text-xs py-2 rounded-lg border transition-all font-medium"
+          style={{
+            borderColor: isVencOpen ? '#ef4444' : '#334155',
+            color:        isVencOpen ? '#f87171' : '#94a3b8',
+            background:   isVencOpen ? '#ef444415' : 'transparent',
+          }}
+        >
+          Vencidos ⚡ <span className="ml-1 opacity-70">({stats.qtd_vencidos ?? 0})</span>
+        </button>
+        <button
+          onClick={() => togglePanel(idAven)}
+          className="flex-1 text-xs py-2 rounded-lg border transition-all font-medium"
+          style={{
+            borderColor: isAvenOpen ? color : '#334155',
+            color:        isAvenOpen ? color : '#94a3b8',
+            background:   isAvenOpen ? color + '20' : 'transparent',
+          }}
+        >
+          A Vencer 30d ⚡ <span className="ml-1 opacity-70">({stats.qtd_a_vencer ?? 0})</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── LimiteCreditoTable ────────────────────────────────────────────────────────
+function LimiteCreditoTable({ rows }) {
+  if (!rows?.length) return null
+
+  return (
+    <div className="bg-card border border-card_border rounded-lg p-4">
+      <p className="text-[10px] text-subtext uppercase tracking-widest mb-3">
+        Limite de Crédito — Boleto ({rows.length})
+      </p>
+      <div className="overflow-x-auto max-h-72 overflow-y-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-slate-800">
+              <th className="px-3 py-2 text-left text-slate-400 font-semibold">Cód. · Cliente</th>
+              <th className="px-3 py-2 text-right text-slate-400 font-semibold">Limite</th>
+              <th className="px-3 py-2 text-right text-slate-400 font-semibold">Utilizado</th>
+              <th className="px-3 py-2 text-right text-slate-400 font-semibold">Livre</th>
+              <th className="px-3 py-2 text-left text-slate-400 font-semibold" style={{ minWidth: 100 }}>
+                Utilização
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const pct = r.pct_utilizado ?? 0
+              const barColor = pct >= 90 ? '#ef4444' : pct >= 70 ? '#f59e0b' : '#22c55e'
+              return (
+                <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                  <td className="px-3 py-2 text-slate-200">
+                    {r.CodRedCt && (
+                      <span
+                        className="inline-block text-[9px] font-bold bg-slate-900 text-slate-400 px-1.5 py-0.5 rounded mr-1.5"
+                        style={{ border: '1px solid #334155' }}
+                      >
+                        {r.CodRedCt}
+                      </span>
+                    )}
+                    {r.NomeFantCli}
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-300">{fmtR(r.limite_credito)}</td>
+                  <td className="px-3 py-2 text-right font-medium" style={{ color: barColor }}>
+                    {fmtR(r.utilizado)}
+                  </td>
+                  <td className="px-3 py-2 text-right text-slate-300">{fmtR(r.livre)}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                        <div
+                          style={{
+                            width: `${Math.min(pct, 100)}%`,
+                            height: '100%',
+                            background: barColor,
+                            borderRadius: 9999,
+                          }}
+                        />
+                      </div>
+                      <span className="text-[10px]" style={{ color: barColor }}>
+                        {pct.toFixed(0)}%
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+export default function Financeiro({ refreshTrigger }) {
+  const { data, loading, error, isEmpty } = useFilteredDados('financeiro', {}, refreshTrigger)
+  const [openPanel, setOpenPanel] = useState(null)
+
+  const qtd_total_aberto = data?.qtd_total_aberto ?? 0
+  const qtd_vencidos     = data?.qtd_vencidos     ?? 0
+  const qtd_a_vencer     = data?.qtd_a_vencer     ?? 0
+  const qtd_recebido_mes = data?.qtd_recebido_mes ?? 0
+  const donutData        = data?.donut_status     ?? []
+  const venc30d          = data?.vencimentos_30d  ?? []
+  const boleto           = data?.boleto           ?? {}
+  const cartao           = data?.cartao           ?? {}
+  const bolVenc          = data?.bol_vencidos     ?? []
+  const bolAven          = data?.bol_a_vencer     ?? []
+  const carVenc          = data?.car_vencidos     ?? []
+  const carAven          = data?.car_a_vencer     ?? []
+  const hojeVenc         = data?.hoje_vencidos    ?? []
+  const limiteRows       = data?.limite_credito   ?? []
+
+  const togglePanel = id => setOpenPanel(p => p === id ? null : id)
+
+  if (loading && !data) return (
+    <div className="flex items-center justify-center h-64 text-subtext text-sm">
+      Carregando dados financeiros…
+    </div>
+  )
+  if (error && !data) return (
+    <div className="flex items-center justify-center h-64 text-accent_red text-sm">
+      Erro ao carregar dados: {error}
+    </div>
+  )
+  if (isEmpty) return (
+    <div className="flex items-center justify-center h-64 text-subtext text-sm">
+      <div className="text-center space-y-1">
+        <p>Bot Financeiro está processando dados…</p>
+        <p className="text-xs opacity-60">A página atualiza automaticamente quando concluir.</p>
+      </div>
+    </div>
+  )
 
   return (
     <div className="p-6 space-y-5">
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-text_main">Financeiro</h1>
+        <h1 className="text-xl font-bold text-text_main">Contas a Receber</h1>
         {data?.ultimo_update && (
           <span className="text-subtext text-xs">Atualizado: {data.ultimo_update}</span>
         )}
       </div>
 
-      {/* ── KPI Summary Row ─────────────────────────────────────────────────── */}
+      {/* ── KPI Cards ──────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <KpiCard label="Faturamento Hoje" value={shortBrl(fat_dia)}   variant="default" />
-        <KpiCard label="Ticket Médio"     value={brl(ticket_medio)}   variant="default" />
-        <KpiCard label="Recebido no Mês"  value={shortBrl(recebido_mes)} variant="success" />
         <KpiCard
-          label="Fluxo de Caixa"
-          value={brl(fluxo_caixa)}
-          variant={fluxo_caixa >= 0 ? 'success' : 'error'}
+          label="Total a Receber"
+          value={String(qtd_total_aberto)}
+          sub="títulos em aberto"
+          variant="default"
+          topBorder="#3b82f6"
+        />
+        <KpiCard
+          label="Títulos Vencidos"
+          value={String(qtd_vencidos)}
+          sub="em atraso"
+          variant="error"
+          topBorder="#ef4444"
+        />
+        <KpiCard
+          label="Próximos a Vencer"
+          value={String(qtd_a_vencer)}
+          sub="nos próximos 30 dias"
+          variant="warning"
+          topBorder="#f59e0b"
+        />
+        <KpiCard
+          label="Recebido no Mês"
+          value={String(qtd_recebido_mes)}
+          sub="títulos quitados"
+          variant="success"
+          topBorder="#22c55e"
         />
       </div>
 
-      {/* ── Sub-tabs ────────────────────────────────────────────────────────── */}
-      <div className="border-b border-card_border flex gap-1">
-        <TabBtn
-          label="Contas a Receber"
-          active={activeTab === 'receber'}
-          onClick={() => setActiveTab('receber')}
-        />
-        <TabBtn
-          label="Contas a Pagar"
-          active={activeTab === 'pagar'}
-          onClick={() => setActiveTab('pagar')}
-        />
+      {/* ── Charts Row ─────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+        <div className="lg:col-span-2 bg-card border border-card_border rounded-lg p-4">
+          <p className="text-[10px] text-subtext uppercase tracking-widest mb-3">
+            Status dos Títulos
+          </p>
+          <DonutChart data={donutData} />
+        </div>
+        <div className="lg:col-span-3 bg-card border border-card_border rounded-lg p-4">
+          <p className="text-[10px] text-subtext uppercase tracking-widest mb-3">
+            Vencimentos — Próximos 30 Dias
+          </p>
+          <VencimentosBarChart
+            bars={venc30d}
+            onTodayClick={() => togglePanel('hoje-venc')}
+          />
+        </div>
       </div>
 
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* TAB: Contas a Receber                                                  */}
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      {activeTab === 'receber' && (
-        <div className="space-y-4">
+      {/* ── Drill-down: Hoje ───────────────────────────────────────────── */}
+      <DrilldownPanel
+        title="⚡ Vencimentos Hoje — Todos os Tipos"
+        rows={hojeVenc}
+        open={openPanel === 'hoje-venc'}
+        onClose={() => setOpenPanel(null)}
+        color="#f59e0b"
+      />
 
-          {/* KPI row CR */}
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-            <KpiCard label="A Receber"       value={shortBrl(total_a_receber)}    variant="default" />
-            <KpiCard
-              label="Inadimplência"
-              value={shortBrl(total_inadimplente)}
-              variant={total_inadimplente > 0 ? 'error' : 'success'}
-            />
-            <KpiCard
-              label="% Inadimplência"
-              value={`${indice_inadimplencia.toFixed(1)}%`}
-              variant={indice_inadimplencia > 5 ? 'warning' : 'default'}
-            />
-            <KpiCard label="QTD Inadimplentes" value={String(qtd_inadimplentes)} variant="warning" />
-            <KpiCard label="A Vencer 20d"    value={shortBrl(a_vencer_20d)}      variant="default" />
-          </div>
+      {/* ── Foco Boleto ────────────────────────────────────────────────── */}
+      <FocoSection
+        title="🧾 Foco — Boleto"
+        stats={boleto}
+        idVenc="bol-venc"
+        idAven="bol-aven"
+        openPanel={openPanel}
+        togglePanel={togglePanel}
+        color="#3b82f6"
+      />
+      <DrilldownPanel
+        title="🔴 Boleto — Títulos Vencidos"
+        rows={bolVenc}
+        open={openPanel === 'bol-venc'}
+        onClose={() => setOpenPanel(null)}
+        color="#ef4444"
+      />
+      <DrilldownPanel
+        title="🧾 Boleto — Títulos a Vencer"
+        rows={bolAven}
+        open={openPanel === 'bol-aven'}
+        onClose={() => setOpenPanel(null)}
+        color="#3b82f6"
+      />
 
-          {/* KPI row CR — row 2 */}
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-            <KpiCard label="Recebido Hoje"   value={brl(rec_hoje)}    variant="success" />
-            <KpiCard label="Recebido Semana" value={brl(rec_semana)}  variant="success" />
-            <KpiCard label="A Vencer 30d"    value={shortBrl(a_vencer_30d)} variant="default" />
-          </div>
+      {/* ── Foco Cartão ─────────────────────────────────────────────────── */}
+      <FocoSection
+        title="💳 Foco — Cartão"
+        stats={cartao}
+        idVenc="car-venc"
+        idAven="car-aven"
+        openPanel={openPanel}
+        togglePanel={togglePanel}
+        color="#a855f7"
+      />
+      <DrilldownPanel
+        title="🔴 Cartão — Títulos Vencidos"
+        rows={carVenc}
+        open={openPanel === 'car-venc'}
+        onClose={() => setOpenPanel(null)}
+        color="#ef4444"
+      />
+      <DrilldownPanel
+        title="💳 Cartão — Títulos a Vencer"
+        rows={carAven}
+        open={openPanel === 'car-aven'}
+        onClose={() => setOpenPanel(null)}
+        color="#a855f7"
+      />
 
-          {/* PieChart + Maior Inadimplente */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="bg-card border border-card_border rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-text_main mb-3">Por Tipo de Recebimento</h3>
-              <PieChart
-                data={porTipo.slice(0, 6)}
-                nameKey="TipoRecebimento"
-                valueKey="valor"
-                showValue
-                formatter={shortBrl}
-                height={200}
-              />
-            </div>
-
-            <div className="bg-card border border-card_border rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-text_main mb-3">Maior Inadimplente</h3>
-              {topInad ? (
-                <div className="space-y-3 text-sm mt-1">
-                  <div>
-                    <p className="text-subtext text-[10px] uppercase tracking-wider mb-0.5">Cliente</p>
-                    <p className="text-text_main font-semibold truncate">{topInad.NomeCli}</p>
-                  </div>
-                  <div className="grid grid-cols-3 gap-3">
-                    <div>
-                      <p className="text-subtext text-[10px] uppercase tracking-wider mb-0.5">Valor</p>
-                      <p className="text-red-400 font-bold">{brl(topInad.VlrTotal)}</p>
-                    </div>
-                    <div>
-                      <p className="text-subtext text-[10px] uppercase tracking-wider mb-0.5">Dias</p>
-                      <p className="text-red-400 font-bold">{topInad.DiasAtraso ?? 0}d</p>
-                    </div>
-                    <div>
-                      <p className="text-subtext text-[10px] uppercase tracking-wider mb-0.5">Vencto</p>
-                      <p className="text-text_main font-medium">{fmtDate(topInad.DtVenctoMaisAntigo)}</p>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-subtext text-[10px] uppercase tracking-wider mb-0.5">Títulos</p>
-                    <p className="text-text_main">{topInad.QtdTitulos ?? '—'}</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-subtext text-sm mt-4">Sem inadimplentes</p>
-              )}
-            </div>
-          </div>
-
-          {/* Títulos em aberto */}
-          <div className="bg-card border border-card_border rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-text_main mb-3">
-              Títulos em Aberto ({titulosCR.length})
-            </h3>
-            <DataTable columns={TITULOS_CR_COLS} rows={titulosCR} />
-          </div>
-
-          {/* Top inadimplentes */}
-          <div className="bg-card border border-card_border rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-text_main mb-3">
-              Top Clientes Inadimplentes ({inadimplentes.length})
-            </h3>
-            <DataTable columns={INAD_COLS} rows={inadimplentes} />
-          </div>
-        </div>
-      )}
-
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* TAB: Contas a Pagar                                                    */}
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      {activeTab === 'pagar' && (
-        <div className="space-y-4">
-
-          {/* KPI row CP */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <KpiCard label="Total a Pagar" value={shortBrl(total_a_pagar)} variant="warning" />
-            <KpiCard
-              label="Vencidos"
-              value={shortBrl(vencido_pagar)}
-              variant={vencido_pagar > 0 ? 'error' : 'default'}
-            />
-            <KpiCard label="A Vencer 20d" value={shortBrl(a_vencer_pagar_20d)} variant="default" />
-            <KpiCard label="Títulos CP"   value={String(titulosCP.length)}     variant="default" />
-          </div>
-
-          {/* Títulos a pagar */}
-          <div className="bg-card border border-card_border rounded-lg p-4">
-            <h3 className="text-sm font-semibold text-text_main mb-3">
-              Títulos a Pagar ({titulosCP.length})
-            </h3>
-            <DataTable columns={TITULOS_CP_COLS} rows={titulosCP} />
-          </div>
-
-          {/* Movimento financeiro — BarChart */}
-          {movChartData.length > 0 && (
-            <div className="bg-card border border-card_border rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-text_main mb-3">
-                Fluxo — Últimos 30 Dias
-              </h3>
-              <BarChart
-                data={movChartData}
-                xKey="data"
-                bars={[
-                  { key: 'Entrada', label: 'Entrada', formatter: shortBrl },
-                  { key: 'Saída',   label: 'Saída',   formatter: shortBrl },
-                ]}
-                colors={['#238636', '#da3633']}
-                height={220}
-              />
-            </div>
-          )}
-
-          {/* Centro de Custo + NF-e */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="bg-card border border-card_border rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-text_main mb-3">
-                Centro de Custo ({movCC.length})
-              </h3>
-              <DataTable columns={MOV_CC_COLS} rows={movCC} />
-            </div>
-            <div className="bg-card border border-card_border rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-text_main mb-3">
-                Monitor NF-e ({nfeList.length})
-              </h3>
-              <DataTable columns={NFE_COLS} rows={nfeList} />
-            </div>
-          </div>
-
-          {/* Pedidos confirmados */}
-          {pedidosList.length > 0 && (
-            <div className="bg-card border border-card_border rounded-lg p-4">
-              <h3 className="text-sm font-semibold text-text_main mb-3">
-                Pedidos Confirmados ({pedidosList.length})
-              </h3>
-              <DataTable columns={PEDIDOS_COLS} rows={pedidosList} />
-            </div>
-          )}
-        </div>
-      )}
+      {/* ── Limite de Crédito ───────────────────────────────────────────── */}
+      <LimiteCreditoTable rows={limiteRows} />
 
     </div>
-  );
+  )
 }
