@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useFilteredDados } from '../hooks/useApi'
 import KpiCard from '../components/KpiCard'
-import { brl, fmtDate } from '../utils/format'
+import { fmtDate } from '../utils/format'
 
 // ── Formatters ──────────────────────────────────────────────────────────────
 const fmtR = v =>
