@@ -1,5 +1,5 @@
 import {
-  PieChart as RC, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
+  PieChart as RC, Pie, Cell, Tooltip, ResponsiveContainer,
 } from 'recharts';
 import { brl } from '../utils/format';
 
@@ -24,52 +24,53 @@ export default function PieChart({
   }
   const fmt = formatter || brl;
 
-  const renderLegend = ({ payload }) => (
-    <ul className="flex flex-col gap-1 text-[10px] max-h-32 overflow-y-auto">
-      {payload.map((entry, i) => (
-        <li key={i} className="flex items-center gap-1.5">
-          <span
-            className="w-2 h-2 rounded-sm flex-shrink-0 inline-block"
-            style={{ background: entry.color }}
-          />
-          <span className="text-subtext">
-            {entry.value}
-            {showValue && (
-              <> · <span className="text-text_main font-bold">{fmt(entry.payload?.[valueKey])}</span></>
-            )}
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
-
   return (
-    <ResponsiveContainer width="100%" height={height}>
-      <RC>
-        <Pie
-          data={data}
-          nameKey={nameKey}
-          dataKey={valueKey}
-          innerRadius={45}
-          outerRadius={72}
-          paddingAngle={2}
-        >
-          {data.map((entry, i) => (
-            <Cell
-              key={i}
-              fill={COLORS[i % COLORS.length]}
-              fillOpacity={highlightKey ? (entry[nameKey] === highlightKey ? 1 : 0.35) : 1}
+    <div style={{ height }} className="flex items-center gap-4">
+      {/* Pie — largura fixa à esquerda, nunca invade a legenda */}
+      <div className="flex-shrink-0" style={{ width: 160, height }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <RC>
+            <Pie
+              data={data}
+              nameKey={nameKey}
+              dataKey={valueKey}
+              innerRadius={45}
+              outerRadius={72}
+              paddingAngle={2}
+            >
+              {data.map((entry, i) => (
+                <Cell
+                  key={i}
+                  fill={COLORS[i % COLORS.length]}
+                  fillOpacity={highlightKey ? (entry[nameKey] === highlightKey ? 1 : 0.35) : 1}
+                />
+              ))}
+            </Pie>
+            <Tooltip {...TOOLTIP} formatter={v => [fmt(v)]} />
+          </RC>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Legenda — ocupa o espaço restante à direita */}
+      <ul
+        className="flex-1 flex flex-col gap-2 text-[10px] overflow-y-auto pr-1"
+        style={{ maxHeight: height - 16 }}
+      >
+        {data.map((entry, i) => (
+          <li key={i} className="flex items-start gap-1.5">
+            <span
+              className="w-2 h-2 rounded-sm flex-shrink-0 inline-block mt-[1px]"
+              style={{ background: COLORS[i % COLORS.length] }}
             />
-          ))}
-        </Pie>
-        <Tooltip {...TOOLTIP} formatter={v => [fmt(v)]} />
-        <Legend
-          content={renderLegend}
-          layout="vertical"
-          align="right"
-          verticalAlign="middle"
-        />
-      </RC>
-    </ResponsiveContainer>
+            <span className="text-subtext leading-snug">
+              {entry[nameKey]}
+              {showValue && (
+                <> · <span className="text-text_main font-bold">{fmt(entry[valueKey])}</span></>
+              )}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

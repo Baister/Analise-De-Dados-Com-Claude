@@ -1349,13 +1349,17 @@ class BotFinanceiro(BaseBot):
     def analisar(self) -> dict:  # noqa: C901
         # Used only for TbCli.CodPlanoVndPadrao filter (credit limit query).
         # vmCtRecDetalhe drill-downs use Receita = 'BOLETO' — CodPlanoVnd does not exist there.
-        BOLETO_PADRAO_IN = ("'06','16','17','18','23','24','30',"
-                            "'32','33','34','35','36','37','38','39',"
-                            "'40','41','42','43','44','45','46','47',"
-                            "'48','49','50','51','54'")
+        # CodPlanoVndPadrao in TbCli is stored with 3 digits, zero-padded (e.g. '006' not '06').
+        BOLETO_PADRAO_IN = ("'006','016','017','018','023','024','030',"
+                            "'032','033','034','035','036','037','038','039',"
+                            "'040','041','042','043','044','045','046','047',"
+                            "'048','049','050','051','054'")
+
+        # Títulos a partir de 2025 (exclui títulos históricos muito antigos ainda abertos)
+        _DTINI_FIN = "'2025-01-01'"
 
         # ── Q1: Totais gerais (vmCtRecDetalhe — view already filters open) ─
-        df_totais = db.query("""
+        df_totais = db.query(f"""
             SELECT
                 COUNT(*) AS qtd_total_aberto,
                 COUNT(CASE WHEN Vencendo = 'Atrasados' THEN 1 END) AS qtd_vencidos,
@@ -1363,6 +1367,7 @@ class BotFinanceiro(BaseBot):
                 SUM(CASE WHEN Vencendo = 'Atrasados' THEN Valor ELSE 0 END) AS vlr_vencidos,
                 SUM(CASE WHEN Vencendo <> 'Atrasados' THEN Valor ELSE 0 END) AS vlr_a_vencer
             FROM Blue.dbo.vmCtRecDetalhe WITH (NOLOCK)
+            WHERE DtVencimento >= {_DTINI_FIN}
         """)
         qtd_total_aberto = _safe_int(df_totais, "qtd_total_aberto")
         qtd_vencidos     = _safe_int(df_totais, "qtd_vencidos")
@@ -1390,6 +1395,53 @@ class BotFinanceiro(BaseBot):
             qtd_recebido_mes = 0
             vlr_recebido_mes = 0.0
 
+        # ── Q2b/Q2c: Recebido no mês por tipo (Boleto / Cartão) ─────────
+        _MES_INI_REC = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)"
+        _MES_FIM_REC = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)"
+
+        # Q2b: Boleto recebido no mês — NumBoleto preenchido = boleto
+        df_rec_bol = db.query(f"""
+            SELECT COUNT(*) AS qtd
+            FROM Blue.dbo.vmCtRecRecebido WITH (NOLOCK)
+            WHERE DtQuitCtRec >= {_MES_INI_REC}
+              AND DtQuitCtRec <  {_MES_FIM_REC}
+              AND NumBoleto IS NOT NULL
+              AND NumBoleto <> ''
+        """)
+        qtd_recebido_bol = int(df_rec_bol["qtd"].iloc[0]) if not df_rec_bol.empty else 0
+
+        # Q2c: Cartão recebido no mês — log TpCobrCtRec values to find cartão discriminator
+        _tpcobr_vals = db.query(f"""
+            SELECT DISTINCT TOP 20 TpCobrCtRec AS tipo, COUNT(*) AS n
+            FROM Blue.dbo.vmCtRecRecebido WITH (NOLOCK)
+            WHERE DtQuitCtRec >= {_MES_INI_REC}
+              AND DtQuitCtRec <  {_MES_FIM_REC}
+            GROUP BY TpCobrCtRec
+        """)
+        if not _tpcobr_vals.empty:
+            logger.info("[Fin] Q2c TpCobrCtRec values: %s", _tpcobr_vals.to_dict('records'))
+            # Match cartão: look for CC/cartão-like values
+            _car_tipos = [
+                str(r["tipo"]) for _, r in _tpcobr_vals.iterrows()
+                if any(k in str(r["tipo"]).upper() for k in ('CC', 'CAR', 'CART', 'CRED', 'CD'))
+            ]
+            if _car_tipos:
+                _car_in = "'" + "','".join(_car_tipos) + "'"
+                df_rec_car = db.query(f"""
+                    SELECT COUNT(*) AS qtd
+                    FROM Blue.dbo.vmCtRecRecebido WITH (NOLOCK)
+                    WHERE DtQuitCtRec >= {_MES_INI_REC}
+                      AND DtQuitCtRec <  {_MES_FIM_REC}
+                      AND TpCobrCtRec IN ({_car_in})
+                """)
+                qtd_recebido_car = int(df_rec_car["qtd"].iloc[0]) if not df_rec_car.empty else 0
+            else:
+                qtd_recebido_car = 0
+        else:
+            qtd_recebido_car = 0
+
+        logger.info("[Fin] Q2b/Q2c: bol=%d car=%d", qtd_recebido_bol, qtd_recebido_car)
+
         # ── Q3: Bar chart — vencimentos por dia próximos 30d ────────────
         df_venc30 = db.query("""
             SELECT TOP 30
@@ -1412,7 +1464,7 @@ class BotFinanceiro(BaseBot):
                 })
 
         # ── Q4: Boleto stats ──────────────────────────────────────────────
-        df_bol_stats = db.query("""
+        df_bol_stats = db.query(f"""
             SELECT
                 COUNT(*) AS qtd_total,
                 SUM(Valor) AS valor_total,
@@ -1422,10 +1474,11 @@ class BotFinanceiro(BaseBot):
                 SUM(CASE WHEN Vencendo <> 'Atrasados' THEN Valor ELSE 0 END) AS vlr_a_vencer
             FROM Blue.dbo.vmCtRecDetalhe WITH (NOLOCK)
             WHERE Receita = 'BOLETO'
+              AND DtVencimento >= {_DTINI_FIN}
         """)
 
         # ── Q5: Cartão stats ──────────────────────────────────────────────
-        df_car_stats = db.query("""
+        df_car_stats = db.query(f"""
             SELECT
                 COUNT(*) AS qtd_total,
                 SUM(Valor) AS valor_total,
@@ -1435,10 +1488,11 @@ class BotFinanceiro(BaseBot):
                 SUM(CASE WHEN Vencendo <> 'Atrasados' THEN Valor ELSE 0 END) AS vlr_a_vencer
             FROM Blue.dbo.vmCtRecDetalhe WITH (NOLOCK)
             WHERE Receita = 'CARTAO DE CREDITO'
+              AND DtVencimento >= {_DTINI_FIN}
         """)
 
         # ── Q6: Drill-down Boleto Vencidos ────────────────────────────────
-        df_bol_venc = db.query("""
+        df_bol_venc = db.query(f"""
             SELECT TOP 200
                 ISNULL(c.CodRedCt, '') AS CodRedCt,
                 d.NomeCli,
@@ -1450,11 +1504,12 @@ class BotFinanceiro(BaseBot):
             LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON d.CodCli = c.CodRedCt
             WHERE d.Receita = 'BOLETO'
               AND d.Vencendo = 'Atrasados'
+              AND d.DtVencimento >= {_DTINI_FIN}
             ORDER BY dias_atraso DESC
         """)
 
         # ── Q7: Drill-down Boleto A Vencer ────────────────────────────────
-        df_bol_aven = db.query("""
+        df_bol_aven = db.query(f"""
             SELECT TOP 200
                 ISNULL(c.CodRedCt, '') AS CodRedCt,
                 d.NomeCli,
@@ -1466,11 +1521,12 @@ class BotFinanceiro(BaseBot):
             LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON d.CodCli = c.CodRedCt
             WHERE d.Receita = 'BOLETO'
               AND d.Vencendo <> 'Atrasados'
+              AND d.DtVencimento >= {_DTINI_FIN}
             ORDER BY d.DtVencimento ASC
         """)
 
         # ── Q8: Drill-down Cartão Vencidos ────────────────────────────────
-        df_car_venc = db.query("""
+        df_car_venc = db.query(f"""
             SELECT TOP 200
                 ISNULL(c.CodRedCt, '') AS CodRedCt,
                 d.NomeCli,
@@ -1482,11 +1538,12 @@ class BotFinanceiro(BaseBot):
             LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON d.CodCli = c.CodRedCt
             WHERE d.Receita = 'CARTAO DE CREDITO'
               AND d.Vencendo = 'Atrasados'
+              AND d.DtVencimento >= {_DTINI_FIN}
             ORDER BY dias_atraso DESC
         """)
 
         # ── Q9: Drill-down Cartão A Vencer ────────────────────────────────
-        df_car_aven = db.query("""
+        df_car_aven = db.query(f"""
             SELECT TOP 200
                 ISNULL(c.CodRedCt, '') AS CodRedCt,
                 d.NomeCli,
@@ -1498,6 +1555,7 @@ class BotFinanceiro(BaseBot):
             LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON d.CodCli = c.CodRedCt
             WHERE d.Receita = 'CARTAO DE CREDITO'
               AND d.Vencendo <> 'Atrasados'
+              AND d.DtVencimento >= {_DTINI_FIN}
             ORDER BY d.DtVencimento ASC
         """)
 
@@ -1509,6 +1567,7 @@ class BotFinanceiro(BaseBot):
                 d.Documento AS NrDoc,
                 d.Valor AS VlrTitulo,
                 d.DtVencimento AS DtVcto,
+                d.Receita,
                 0 AS dias_faltando
             FROM Blue.dbo.vmCtRecDetalhe d WITH (NOLOCK)
             LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON d.CodCli = c.CodRedCt
@@ -1516,8 +1575,39 @@ class BotFinanceiro(BaseBot):
             ORDER BY d.Valor DESC
         """)
 
+        # ── Schema discovery: TbCli + TbLimCredCli ───────────────────────
+        _sch_cli = db.query("SELECT TOP 0 * FROM Blue.dbo.TbCli WITH (NOLOCK)")
+        _sch_lim = db.query("SELECT TOP 0 * FROM Blue.dbo.TbLimCredCli WITH (NOLOCK)")
+        cli_cols = list(_sch_cli.columns)
+        lim_cols = list(_sch_lim.columns)
+        logger.info("[Fin] TbCli relevant cols: %s",
+                    [c for c in cli_cols
+                     if any(k in c.lower() for k in ('lim', 'cred', 'plan', 'status', 'redct'))])
+        logger.info("[Fin] TbLimCredCli all cols: %s", lim_cols)
+
         # ── Q11: Limite de crédito boleto ─────────────────────────────────
-        df_limite = db.query(f"""
+        # Determine JOIN columns dynamically — PK name varies across installs
+        _cli_fk = next((c for c in ('CodLimCredCli', 'CodLimCred') if c in cli_cols), None)
+        _lim_pk = next((c for c in ('CodLimCredCli', 'CodLimCred') if c in lim_cols), None)
+
+        # [DIAG] Identify which filter zeroes the result
+        _join_cond_diag = f"c.{_cli_fk} = l.{_lim_pk}" if (_cli_fk and _lim_pk) else "c.CodRedCt = l.CodRedCt"
+        _diag = db.query(f"""
+            SELECT TOP 5
+                c.CodRedCt, c.StatusCli, c.CodPlanoVndPadrao,
+                l.ValLimCred1, c.CodLimCredCli AS cli_fk_val
+            FROM Blue.dbo.TbCli c WITH (NOLOCK)
+            JOIN Blue.dbo.TbLimCredCli l WITH (NOLOCK)
+                ON {_join_cond_diag}
+            WHERE l.ValLimCred1 > 0
+        """)
+        if _diag.empty:
+            logger.warning("[Fin] Q11-DIAG: JOIN+ValLimCred1>0 retornou 0 linhas. last_error=%s", db.last_error)
+        else:
+            logger.info("[Fin] Q11-DIAG sample (sem filtro StatusCli/CodPlano): %s",
+                        _diag.to_dict('records'))
+
+        _Q11_BODY = f"""
             SELECT TOP 100
                 c.CodRedCt,
                 c.NomeFantCli,
@@ -1525,7 +1615,7 @@ class BotFinanceiro(BaseBot):
                 ISNULL(SUM(d.Valor), 0) AS utilizado
             FROM Blue.dbo.TbCli c WITH (NOLOCK)
             JOIN Blue.dbo.TbLimCredCli l WITH (NOLOCK)
-                ON c.CodLimCredCli = l.CodLimCredCli
+                ON {{join_cond}}
             LEFT JOIN Blue.dbo.vmCtRecDetalhe d WITH (NOLOCK)
                 ON d.CodCli = c.CodRedCt
                 AND d.Receita = 'BOLETO'
@@ -1534,7 +1624,46 @@ class BotFinanceiro(BaseBot):
               AND c.CodPlanoVndPadrao IN ({BOLETO_PADRAO_IN})
             GROUP BY c.CodRedCt, c.NomeFantCli, l.ValLimCred1
             ORDER BY ISNULL(SUM(d.Valor), 0) / l.ValLimCred1 DESC
-        """)
+        """
+
+        _join_cond_q11 = (
+            f"c.{_cli_fk} = l.{_lim_pk}" if (_cli_fk and _lim_pk)
+            else "c.CodRedCt = l.CodRedCt" if 'CodRedCt' in lim_cols
+            else None
+        )
+
+        if _join_cond_q11:
+            df_limite = db.query(_Q11_BODY.format(join_cond=_join_cond_q11))
+            logger.info("[Fin] Q11: %d linhas (JOIN %s) last_error=%s",
+                        len(df_limite), _join_cond_q11, db.last_error or "none")
+
+            # Fallback: se Q11 vazio mas diagnóstico tem linhas, provavelmente
+            # CodPlanoVndPadrao ou StatusCli não batem — mostra todos com limite
+            if df_limite.empty and not _diag.empty:
+                logger.warning("[Fin] Q11 vazio com filtros; retentando sem CodPlanoVndPadrao/StatusCli")
+                _Q11_BROAD = f"""
+                    SELECT TOP 100
+                        c.CodRedCt,
+                        c.NomeFantCli,
+                        l.ValLimCred1 AS limite_credito,
+                        ISNULL(SUM(d.Valor), 0) AS utilizado
+                    FROM Blue.dbo.TbCli c WITH (NOLOCK)
+                    JOIN Blue.dbo.TbLimCredCli l WITH (NOLOCK)
+                        ON {_join_cond_q11}
+                    LEFT JOIN Blue.dbo.vmCtRecDetalhe d WITH (NOLOCK)
+                        ON d.CodCli = c.CodRedCt
+                        AND d.Receita = 'BOLETO'
+                    WHERE l.ValLimCred1 > 0
+                    GROUP BY c.CodRedCt, c.NomeFantCli, l.ValLimCred1
+                    ORDER BY ISNULL(SUM(d.Valor), 0) / l.ValLimCred1 DESC
+                """
+                df_limite = db.query(_Q11_BROAD)
+                logger.info("[Fin] Q11-broad (sem filtros extra): %d linhas last_error=%s",
+                            len(df_limite), db.last_error or "none")
+        else:
+            logger.warning("[Fin] Q11 ignorado — colunas JOIN não encontradas: cli_fk=%s lim_pk=%s lim_cols=%s",
+                           _cli_fk, _lim_pk, lim_cols)
+            df_limite = pd.DataFrame()
 
         # ── Helper functions ──────────────────────────────────────────────
         def _stats(df):
@@ -1550,6 +1679,7 @@ class BotFinanceiro(BaseBot):
         def _drill(df):
             if df.empty:
                 return []
+            has_receita = "Receita" in df.columns
             rows = []
             for _, r in df.iterrows():
                 atraso   = r.get("dias_atraso")
@@ -1560,14 +1690,17 @@ class BotFinanceiro(BaseBot):
                     dias = -int(faltando)
                 else:
                     dias = 0
-                rows.append({
+                entry = {
                     "CodRedCt":  str(r.get("CodRedCt") or ""),
                     "NomeCli":   str(r.get("NomeCli") or ""),
                     "NrDoc":     str(r.get("NrDoc") or ""),
                     "VlrTitulo": float(r.get("VlrTitulo") or 0),
                     "DtVcto":    str(r.get("DtVcto") or "")[:10],
                     "dias":      dias,
-                })
+                }
+                if has_receita:
+                    entry["Receita"] = str(r.get("Receita") or "")
+                rows.append(entry)
             return rows
 
         limite_lista = []
@@ -1597,6 +1730,8 @@ class BotFinanceiro(BaseBot):
                 {"status": "Vencido",   "qtd": qtd_vencidos,     "valor": round(vlr_vencidos, 2)},
             ],
             "vencimentos_30d": vencimentos_30d,
+            "qtd_recebido_bol": qtd_recebido_bol,
+            "qtd_recebido_car": qtd_recebido_car,
             "boleto":         _stats(df_bol_stats),
             "cartao":         _stats(df_car_stats),
             "bol_vencidos":   _drill(df_bol_venc),

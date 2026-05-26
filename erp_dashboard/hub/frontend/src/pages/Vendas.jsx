@@ -453,7 +453,7 @@ export default function Vendas({ refreshTrigger }) {
             />
             <div className="space-y-3">
               {topVendedores
-                .filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0 && vendaHojeMap[v.Vendedor] !== undefined)
+                .filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0)
                 .map(v => {
                   const metaM    = mIndividuais[v.Vendedor];
                   const real     = v.total_venda ?? 0;
@@ -481,7 +481,7 @@ export default function Vendas({ refreshTrigger }) {
                     </div>
                   );
                 })}
-              {topVendedores.filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0 && vendaHojeMap[v.Vendedor] !== undefined).length === 0 && (
+              {topVendedores.filter(v => (mIndividuais[v.Vendedor] ?? 0) > 0).length === 0 && (
                 <p className="text-xs text-subtext">Configure metas individuais na aba Configurações.</p>
               )}
             </div>
