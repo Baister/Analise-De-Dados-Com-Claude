@@ -1375,72 +1375,58 @@ class BotFinanceiro(BaseBot):
         vlr_vencidos     = _safe_float(df_totais, "vlr_vencidos")
         vlr_a_vencer     = _safe_float(df_totais, "vlr_a_vencer")
 
-        # ── Q2: Recebidos no mês (vmCtRecRecebido) ───────────────────────
-        # vmCtRecRecebido is very large; fetch rows for current month with TOP
-        # to avoid aggregate-level timeout, then aggregate in pandas.
-        df_recebido_raw = db.query("""
-            SELECT TOP 5000
-                DtQuitCtRec,
-                TotalRecebido
-            FROM Blue.dbo.vmCtRecRecebido WITH (NOLOCK)
-            WHERE DtQuitCtRec >= DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
-              AND DtQuitCtRec <  DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)
-        """)
-        if not df_recebido_raw.empty:
-            # NOTE: if vmCtRecRecebido is daily-aggregated (one row per day, not per title),
-            # len() counts days, not titles. Verify via log: each row should be one title.
-            qtd_recebido_mes = int(len(df_recebido_raw))
-            vlr_recebido_mes = float(df_recebido_raw["TotalRecebido"].fillna(0).sum())
-        else:
-            qtd_recebido_mes = 0
-            vlr_recebido_mes = 0.0
-
-        # ── Q2b/Q2c: Recebido no mês por tipo (Boleto / Cartão) ─────────
+        # ── Q2: Recebidos no mês — TbCtRec (índice nativo em DtQuitCtRec) ──
+        # vmCtRecRecebido causa HYT00 em COUNT/SUM sem índice extra.
+        # TbCtRec tem índice nativo em DtQuitCtRec e suporta GROUP BY sem timeout.
+        # TpCobrCtRec=2 → boleto | outros → cash, PIX, etc.
         _MES_INI_REC = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)"
         _MES_FIM_REC = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)"
 
-        # Q2b: Boleto recebido no mês — NumBoleto preenchido = boleto
-        df_rec_bol = db.query(f"""
-            SELECT COUNT(*) AS qtd
-            FROM Blue.dbo.vmCtRecRecebido WITH (NOLOCK)
-            WHERE DtQuitCtRec >= {_MES_INI_REC}
-              AND DtQuitCtRec <  {_MES_FIM_REC}
-              AND NumBoleto IS NOT NULL
-              AND NumBoleto <> ''
-        """)
-        qtd_recebido_bol = int(df_rec_bol["qtd"].iloc[0]) if not df_rec_bol.empty else 0
-
-        # Q2c: Cartão recebido no mês — log TpCobrCtRec values to find cartão discriminator
-        _tpcobr_vals = db.query(f"""
-            SELECT DISTINCT TOP 20 TpCobrCtRec AS tipo, COUNT(*) AS n
-            FROM Blue.dbo.vmCtRecRecebido WITH (NOLOCK)
+        df_tbrec_dist = db.query(f"""
+            SELECT TpCobrCtRec, COUNT(*) AS qtd, SUM(ValCtRec) AS vlr
+            FROM Blue.dbo.TbCtRec WITH (NOLOCK)
             WHERE DtQuitCtRec >= {_MES_INI_REC}
               AND DtQuitCtRec <  {_MES_FIM_REC}
             GROUP BY TpCobrCtRec
         """)
-        if not _tpcobr_vals.empty:
-            logger.info("[Fin] Q2c TpCobrCtRec values: %s", _tpcobr_vals.to_dict('records'))
-            # Match cartão: look for CC/cartão-like values
-            _car_tipos = [
-                str(r["tipo"]) for _, r in _tpcobr_vals.iterrows()
-                if any(k in str(r["tipo"]).upper() for k in ('CC', 'CAR', 'CART', 'CRED', 'CD'))
-            ]
-            if _car_tipos:
-                _car_in = "'" + "','".join(_car_tipos) + "'"
-                df_rec_car = db.query(f"""
-                    SELECT COUNT(*) AS qtd
-                    FROM Blue.dbo.vmCtRecRecebido WITH (NOLOCK)
-                    WHERE DtQuitCtRec >= {_MES_INI_REC}
-                      AND DtQuitCtRec <  {_MES_FIM_REC}
-                      AND TpCobrCtRec IN ({_car_in})
-                """)
-                qtd_recebido_car = int(df_rec_car["qtd"].iloc[0]) if not df_rec_car.empty else 0
-            else:
-                qtd_recebido_car = 0
-        else:
-            qtd_recebido_car = 0
 
-        logger.info("[Fin] Q2b/Q2c: bol=%d car=%d", qtd_recebido_bol, qtd_recebido_car)
+        qtd_recebido_mes = 0
+        qtd_recebido_bol = 0
+        qtd_recebido_car = 0
+        vlr_recebido_mes = 0.0
+
+        if not df_tbrec_dist.empty:
+            for _, row in df_tbrec_dist.iterrows():
+                tp  = int(row["TpCobrCtRec"]) if row["TpCobrCtRec"] is not None else -1
+                qtd = int(row["qtd"])
+                vlr = float(row["vlr"]) if row["vlr"] is not None else 0.0
+                qtd_recebido_mes += qtd
+                vlr_recebido_mes += vlr
+                if tp == 2:        # boleto — TpCobrCtRec=2 confirmado via TbCtRec
+                    qtd_recebido_bol = qtd
+        else:
+            logger.warning("[Fin] Q2 TbCtRec vazio ou erro: %s", db.last_error)
+
+        # Q2c: Cartão — títulos quitados no mês com ValCartaoQuitCtRec > 0
+        # JOIN composto: TbCtRec ↔ TbLctoQuitCtRec via CodEmpr+NrLctoCtRec+DtLctoCtRec
+        df_car = db.query(f"""
+            SELECT COUNT(*) AS qtd
+            FROM Blue.dbo.TbCtRec r WITH (NOLOCK)
+            WHERE r.DtQuitCtRec >= {_MES_INI_REC}
+              AND r.DtQuitCtRec <  {_MES_FIM_REC}
+              AND EXISTS (
+                SELECT 1 FROM Blue.dbo.TbLctoQuitCtRec l WITH (NOLOCK)
+                WHERE l.CodEmpr     = r.CodEmpr
+                  AND l.NrLctoCtRec = r.NrLctoCtRec
+                  AND l.DtLctoCtRec = r.DtLctoCtRec
+                  AND l.ValCartaoQuitCtRec > 0
+              )
+        """)
+        if not df_car.empty and not db.last_error:
+            qtd_recebido_car = int(df_car["qtd"].iloc[0])
+
+        logger.info("[Fin] Q2 final: global=%d bol=%d car=%d",
+                    qtd_recebido_mes, qtd_recebido_bol, qtd_recebido_car)
 
         # ── Q3: Bar chart — vencimentos por dia próximos 30d ────────────
         df_venc30 = db.query("""
@@ -1580,32 +1566,11 @@ class BotFinanceiro(BaseBot):
         _sch_lim = db.query("SELECT TOP 0 * FROM Blue.dbo.TbLimCredCli WITH (NOLOCK)")
         cli_cols = list(_sch_cli.columns)
         lim_cols = list(_sch_lim.columns)
-        logger.info("[Fin] TbCli relevant cols: %s",
-                    [c for c in cli_cols
-                     if any(k in c.lower() for k in ('lim', 'cred', 'plan', 'status', 'redct'))])
-        logger.info("[Fin] TbLimCredCli all cols: %s", lim_cols)
 
         # ── Q11: Limite de crédito boleto ─────────────────────────────────
         # Determine JOIN columns dynamically — PK name varies across installs
         _cli_fk = next((c for c in ('CodLimCredCli', 'CodLimCred') if c in cli_cols), None)
         _lim_pk = next((c for c in ('CodLimCredCli', 'CodLimCred') if c in lim_cols), None)
-
-        # [DIAG] Identify which filter zeroes the result
-        _join_cond_diag = f"c.{_cli_fk} = l.{_lim_pk}" if (_cli_fk and _lim_pk) else "c.CodRedCt = l.CodRedCt"
-        _diag = db.query(f"""
-            SELECT TOP 5
-                c.CodRedCt, c.StatusCli, c.CodPlanoVndPadrao,
-                l.ValLimCred1, c.CodLimCredCli AS cli_fk_val
-            FROM Blue.dbo.TbCli c WITH (NOLOCK)
-            JOIN Blue.dbo.TbLimCredCli l WITH (NOLOCK)
-                ON {_join_cond_diag}
-            WHERE l.ValLimCred1 > 0
-        """)
-        if _diag.empty:
-            logger.warning("[Fin] Q11-DIAG: JOIN+ValLimCred1>0 retornou 0 linhas. last_error=%s", db.last_error)
-        else:
-            logger.info("[Fin] Q11-DIAG sample (sem filtro StatusCli/CodPlano): %s",
-                        _diag.to_dict('records'))
 
         _Q11_BODY = f"""
             SELECT TOP 100
@@ -1637,9 +1602,8 @@ class BotFinanceiro(BaseBot):
             logger.info("[Fin] Q11: %d linhas (JOIN %s) last_error=%s",
                         len(df_limite), _join_cond_q11, db.last_error or "none")
 
-            # Fallback: se Q11 vazio mas diagnóstico tem linhas, provavelmente
-            # CodPlanoVndPadrao ou StatusCli não batem — mostra todos com limite
-            if df_limite.empty and not _diag.empty:
+            # Fallback: Q11 vazio com filtros — CodPlanoVndPadrao/StatusCli sem match
+            if df_limite.empty and not db.last_error:
                 logger.warning("[Fin] Q11 vazio com filtros; retentando sem CodPlanoVndPadrao/StatusCli")
                 _Q11_BROAD = f"""
                     SELECT TOP 100
@@ -1803,13 +1767,25 @@ class BotCRM(BaseBot):
         """)
 
         # ── Meta vs Realizado por Vendedor ────────────────────────
-        df_meta_vend = db.query(f"""
-            SELECT TOP {MAX}
-                Vendedor,
-                ValMeta,
-                ValRealizado
-            FROM Blue.dbo.vmMetaRealizadoVnd WITH (NOLOCK)
-        """)
+        # Schema discovery first — column names may vary
+        _sch_meta = db.query("SELECT TOP 0 * FROM Blue.dbo.vmMetaRealizadoVnd WITH (NOLOCK)")
+        _meta_cols = list(_sch_meta.columns) if not db.last_error else []
+        _col_vend = next((c for c in _meta_cols if 'vend' in c.lower()), None)
+        _col_meta = next((c for c in _meta_cols if 'meta' in c.lower() and 'realiz' not in c.lower()), None)
+        _col_real = next((c for c in _meta_cols if 'realiz' in c.lower()), None)
+
+        if _col_vend and _col_meta and _col_real:
+            df_meta_vend = db.query(f"""
+                SELECT TOP {MAX}
+                    {_col_vend} AS Vendedor,
+                    {_col_meta} AS ValMeta,
+                    {_col_real} AS ValRealizado
+                FROM Blue.dbo.vmMetaRealizadoVnd WITH (NOLOCK)
+            """)
+        else:
+            logger.warning("[CRM] vmMetaRealizadoVnd colunas não encontradas: %s", _meta_cols)
+            df_meta_vend = pd.DataFrame()
+
         if not df_meta_vend.empty and "ValMeta" in df_meta_vend.columns:
             def _cat(row):
                 meta = float(row.get("ValMeta", 0) or 0)
