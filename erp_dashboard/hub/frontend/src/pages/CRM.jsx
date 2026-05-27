@@ -9,11 +9,11 @@ import { brl, pct, fmtDate } from '../utils/format';
 import { applyFilters, getUniqueValues } from '../utils/filters';
 
 const INAT_COLS = [
-  { key: 'CodCli', label: 'Cód.' },
-  { key: 'NomeCli', label: 'Cliente' },
-  { key: 'UltVenda', label: 'Última Venda', render: v => (v ? fmtDate(v) : '—') },
-  { key: 'DiasInativo', label: 'Dias Inativo', render: v => String(v ?? 0) },
-  { key: 'VlrUltVenda', label: 'Vlr Última Venda', render: v => brl(v) },
+  { key: 'CodCli',               label: 'Cód.' },
+  { key: 'nome_cliente',         label: 'Cliente' },
+  { key: 'ultima_compra',        label: 'Última Compra',  render: v => (v ? fmtDate(v) : '—') },
+  { key: 'dias_sem_compra',      label: 'Dias Inativo',   render: v => String(v ?? 0) },
+  { key: 'faturamento_historico',label: 'Fat. Histórico', render: v => brl(v) },
 ];
 
 export default function CRM({ refreshTrigger }) {
@@ -28,7 +28,7 @@ export default function CRM({ refreshTrigger }) {
 
   const convPorVendedor = data?.conv_por_vendedor ?? [];
   const inativos = data?.inativos_lista ?? [];
-  const statusFunil = data?.funil_status ?? [];
+  const statusFunil = data?.funil ?? [];
 
   const vendedoresOpts = getUniqueValues(convPorVendedor, 'Vendedor');
 
@@ -76,14 +76,14 @@ export default function CRM({ refreshTrigger }) {
 
       {/* KPIs */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Orçamentos no Mês" value={String(data?.qtd_orcamentos ?? 0)} variant="default" />
+        <KpiCard label="Orçamentos no Mês" value={String(data?.total_orcamentos ?? 0)} variant="default" />
         <KpiCard
           label="Taxa de Conversão"
-          value={pct(data?.taxa_conversao ?? 0)}
-          variant={(data?.taxa_conversao ?? 0) >= 40 ? 'success' : 'warning'}
+          value={pct(data?.taxa_conversao_pct ?? 0)}
+          variant={(data?.taxa_conversao_pct ?? 0) >= 40 ? 'success' : 'warning'}
         />
         <KpiCard label="Clientes Inativos" value={String(data?.qtd_inativos ?? 0)} variant="warning" />
-        <KpiCard label="Orçamentos Abertos" value={String(data?.qtd_abertos ?? 0)} variant="default" />
+        <KpiCard label="Em Risco" value={String(data?.qtd_em_risco ?? 0)} variant="default" />
       </div>
 
       <FilterBar filters={filterDefs} values={filters} onChange={setFilters} />
@@ -94,8 +94,8 @@ export default function CRM({ refreshTrigger }) {
           <h2 className="text-sm font-semibold text-text_main mb-3">Funil de Vendas</h2>
           <PieChart
             data={statusFunil.slice(0, 6)}
-            nameKey="status"
-            valueKey="quantidade"
+            nameKey="tipo"
+            valueKey="qtd_documentos"
             showValue={false}
             height={220}
           />
@@ -108,8 +108,8 @@ export default function CRM({ refreshTrigger }) {
             data={filteredConv.slice(0, 10)}
             xKey="Vendedor"
             bars={[
-              { key: 'qtd_orcamentos', label: 'Orçamentos' },
-              { key: 'qtd_convertidos', label: 'Convertidos' },
+              { key: 'orcamentos', label: 'Orçamentos' },
+              { key: 'convertidos', label: 'Convertidos' },
             ]}
             stacked={false}
             height={220}
