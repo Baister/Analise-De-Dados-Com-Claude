@@ -1736,6 +1736,27 @@ class BotCRM(BaseBot):
               AND DtOrcPedVnd <  {_MES_FIM}
         """)
 
+        # ── KPIs do mês anterior (para deltas) ───────────────────
+        df_anterior = db.query(f"""
+            SELECT
+                COUNT(CASE WHEN OrcPedVnd = 1 THEN 1 END) AS total_orc_ant,
+                COUNT(CASE WHEN OrcPedVnd = 2 THEN 1 END) AS total_conv_ant,
+                SUM(CASE WHEN OrcPedVnd = 1 THEN ValTotalOrcPedVnd ELSE 0 END) AS valor_orc_ant
+            FROM Blue.dbo.TbOrcPedVnd WITH (NOLOCK)
+            WHERE DtOrcPedVnd >= {_MES_INI_ANT}
+              AND DtOrcPedVnd <  {_MES_FIM_ANT}
+        """)
+
+        # ── Cancelamentos do mês atual ────────────────────────────
+        df_cancelados = db.query(f"""
+            SELECT COUNT(*) AS cancelados
+            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON o.NrOrcPedVnd = d.NrDoc
+            WHERE o.DtOrcPedVnd >= {_MES_INI}
+              AND o.DtOrcPedVnd <  {_MES_FIM}
+              AND d.Cancelado <> ''
+        """)
+
         # ── Funil por Vendedor e Marca ────────────────────────────
         df_conv_vend = db.query(f"""
             SELECT TOP 20
@@ -1878,12 +1899,56 @@ class BotCRM(BaseBot):
         em_risco = df_inativos[df_inativos["dias_sem_compra"].between(DIAS_RISCO, DIAS_INATIVO - 1)] if not df_inativos.empty else pd.DataFrame()
         inativos = df_inativos[df_inativos["dias_sem_compra"] >= DIAS_INATIVO] if not df_inativos.empty else pd.DataFrame()
 
+        # ── Derivados mês atual ───────────────────────────────────
+        _orc  = _safe_int(df_conv, "total_orcamentos")
+        _conv = _safe_int(df_conv, "total_convertidos")
+        _vlro = _safe_float(df_conv, "valor_orcado")
+        _vlrc = _safe_float(df_conv, "valor_convertido")
+        _taxa = round(_safe_float(df_conv, "taxa_conversao_pct"), 1)
+        _tick = round(_vlrc / _conv, 2) if _conv > 0 else 0.0
+
+        _canc = _safe_int(df_cancelados, "cancelados") if not df_cancelados.empty else 0
+        _ativ = max(_orc - _conv - _canc, 0)
+
+        # Derivados mês anterior
+        _orc_ant  = _safe_int(df_anterior, "total_orc_ant")
+        _conv_ant = _safe_int(df_anterior, "total_conv_ant")
+        _vlro_ant = _safe_float(df_anterior, "valor_orc_ant")
+        _taxa_ant = round((_conv_ant / _orc_ant * 100) if _orc_ant > 0 else 0.0, 1)
+        _delta_taxa  = round(_taxa - _taxa_ant, 1)
+        _delta_vlro  = round(_vlro - _vlro_ant, 2)
+
+        # Distribuição de resultados (proxy motivos de perda)
+        _total_d = _orc if _orc > 0 else 1
+        _distribuicao = [
+            {"status": "Convertidos",   "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
+            {"status": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
+            {"status": "Cancelados",    "qtd": _canc, "pct": round(_canc / _total_d * 100, 1)},
+        ]
+
+        # Funil de etapas (para BarChart horizontal)
+        _funil_etapas = [
+            {"etapa": "Propostas",     "qtd": _orc,  "pct": 100},
+            {"etapa": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
+            {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
+        ]
+
         return {
-            "total_orcamentos":   _safe_int(df_conv, "total_orcamentos"),
-            "total_convertidos":  _safe_int(df_conv, "total_convertidos"),
-            "taxa_conversao_pct": round(_safe_float(df_conv, "taxa_conversao_pct"), 1),
-            "valor_orcado":       _safe_float(df_conv, "valor_orcado"),
-            "valor_convertido":   _safe_float(df_conv, "valor_convertido"),
+            # KPIs principais
+            "total_orcamentos":   _orc,
+            "total_convertidos":  _conv,
+            "taxa_conversao_pct": _taxa,
+            "valor_orcado":       _vlro,
+            "valor_convertido":   _vlrc,
+            # Novas chaves analíticas
+            "ticket_medio":       _tick,
+            "delta_taxa_conv":    _delta_taxa,
+            "delta_valor_orcado": _delta_vlro,
+            "taxa_conversao_ant": _taxa_ant,
+            "valor_orcado_ant":   _vlro_ant,
+            "distribuicao":       _distribuicao,
+            "funil_etapas":       _funil_etapas,
+            # Chaves mantidas para compatibilidade
             "funil":              df_funil.to_dict("records"),
             "conv_por_vendedor":  df_conv_vend.to_dict("records"),
             "inativos_lista":     df_inativos.to_dict("records"),
@@ -1892,6 +1957,7 @@ class BotCRM(BaseBot):
             "qtd_inativos":       len(inativos),
             "tipo_clientes_30d":  df_tipo_cli.to_dict("records"),
             "meta_vendedor":      meta_cats,
+            "ultimo_update":      datetime.now().strftime("%H:%M:%S"),
         }
 
     def analisar_filtrado(self, filtros: dict) -> dict:
