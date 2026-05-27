@@ -24,6 +24,8 @@ DIAS_CRITICO    = ALERTAS.get("estoque_critico_dias_sem_vnd", 90)
 DIAS_LISTA_INAT = 30  # mostra inativos a partir de 30 dias
 _MES_INI        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)"
 _MES_FIM        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)"
+_MES_INI_ANT    = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) - 1, 0)"
+_MES_FIM_ANT    = "DATEADD(month, DATEDIFF(month, 0, GETDATE()),     0)"
 _pl = "','".join(PLANOS_EXCLUIR_FAT)
 _EXCLUIR_PLANO  = f"AND v.CodPlanoVnd NOT IN ('{_pl}')"
 
