@@ -1,42 +1,17 @@
-import { useState, useMemo } from 'react';
 import { useFilteredDados } from '../hooks/useApi';
 import KpiCard from '../components/KpiCard';
-import FilterBar from '../components/FilterBar';
 import PieChart from '../charts/PieChart';
 import BarChart from '../charts/BarChart';
-import DataTable from '../components/DataTable';
-import { brl, pct, fmtDate } from '../utils/format';
-import { applyFilters, getUniqueValues } from '../utils/filters';
+import { shortBrl, pct } from '../utils/format';
 
-const INAT_COLS = [
-  { key: 'CodCli',               label: 'Cód.' },
-  { key: 'nome_cliente',         label: 'Cliente' },
-  { key: 'ultima_compra',        label: 'Última Compra',  render: v => (v ? fmtDate(v) : '—') },
-  { key: 'dias_sem_compra',      label: 'Dias Inativo',   render: v => String(v ?? 0) },
-  { key: 'faturamento_historico',label: 'Fat. Histórico', render: v => brl(v) },
-];
+function fmtDelta(delta, unit = '') {
+  if (delta === 0 || delta == null) return null;
+  const abs = Math.abs(delta);
+  return delta > 0 ? `↑ +${abs}${unit} vs mês ant.` : `↓ ${abs}${unit} vs mês ant.`;
+}
 
 export default function CRM({ refreshTrigger }) {
-  const [filters, setFilters] = useState({});
-  const apiFilters = useMemo(() => {
-    const f = {};
-    if (filters.Vendedor   && filters.Vendedor   !== 'todos') f.vendedor = filters.Vendedor;
-    if (filters.DescrMarca && filters.DescrMarca !== 'todos') f.marca    = filters.DescrMarca;
-    return f;
-  }, [filters]);
-  const { data, loading, error, isEmpty } = useFilteredDados('crm', apiFilters, refreshTrigger);
-
-  const convPorVendedor = data?.conv_por_vendedor ?? [];
-  const inativos = data?.inativos_lista ?? [];
-  const statusFunil = data?.funil ?? [];
-
-  const vendedoresOpts = getUniqueValues(convPorVendedor, 'Vendedor');
-
-  const filterDefs = [
-    { key: 'Vendedor', label: 'Vendedor', type: 'select', options: vendedoresOpts },
-  ];
-
-  const filteredConv = applyFilters(convPorVendedor, { Vendedor: filters.Vendedor });
+  const { data, loading, error, isEmpty } = useFilteredDados('crm', {}, refreshTrigger);
 
   if (loading && !data) {
     return (
@@ -65,64 +40,112 @@ export default function CRM({ refreshTrigger }) {
     );
   }
 
+  const taxaConv    = data?.taxa_conversao_pct ?? 0;
+  const pipeline    = data?.valor_orcado       ?? 0;
+  const orcamentos  = data?.total_orcamentos   ?? 0;
+  const convertidos = data?.total_convertidos  ?? 0;
+  const fechado     = data?.valor_convertido   ?? 0;
+  const ticket      = data?.ticket_medio       ?? 0;
+  const deltaTaxa   = data?.delta_taxa_conv    ?? null;
+  const deltaPipe   = data?.delta_valor_orcado ?? null;
+  const distribuicao = data?.distribuicao      ?? [];
+  const funilEtapas  = data?.funil_etapas      ?? [];
+
+  const deltaTaxaLabel = fmtDelta(deltaTaxa, 'pp');
+  const deltaPipeLabel = deltaPipe != null
+    ? fmtDelta(Math.round(deltaPipe / 1000), 'k')
+    : null;
+
+  const taxaVariant = taxaConv >= 40 ? 'success' : taxaConv >= 25 ? 'warning' : 'error';
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-4">
+
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-text_main">CRM</h1>
+        <h1 className="text-xl font-bold text-text_main">Performance Comercial</h1>
         {data?.ultimo_update && (
           <span className="text-subtext text-xs">Atualizado: {data.ultimo_update}</span>
         )}
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Orçamentos no Mês" value={String(data?.total_orcamentos ?? 0)} variant="default" />
+      {/* 5 KPI cards */}
+      <div className="grid grid-cols-5 gap-3">
         <KpiCard
           label="Taxa de Conversão"
-          value={pct(data?.taxa_conversao_pct ?? 0)}
-          variant={(data?.taxa_conversao_pct ?? 0) >= 40 ? 'success' : 'warning'}
+          value={pct(taxaConv)}
+          sub={deltaTaxaLabel}
+          variant={taxaVariant}
+          topBorder="#1f6feb"
         />
-        <KpiCard label="Clientes Inativos" value={String(data?.qtd_inativos ?? 0)} variant="warning" />
-        <KpiCard label="Em Risco" value={String(data?.qtd_em_risco ?? 0)} variant="default" />
+        <KpiCard
+          label="Pipeline"
+          value={shortBrl(pipeline)}
+          sub={deltaPipeLabel}
+          topBorder="#1f6feb"
+        />
+        <KpiCard
+          label="Propostas Enviadas"
+          value={String(orcamentos)}
+          topBorder="#1f6feb"
+        />
+        <KpiCard
+          label="Vendas Fechadas"
+          value={String(convertidos)}
+          sub={shortBrl(fechado)}
+          variant="success"
+          topBorder="#238636"
+        />
+        <KpiCard
+          label="Ticket Médio"
+          value={shortBrl(ticket)}
+          topBorder="#d29922"
+        />
       </div>
 
-      <FilterBar filters={filterDefs} values={filters} onChange={setFilters} />
+      {/* 2 gráficos */}
+      <div className="flex gap-3 items-start">
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Status funil */}
-        <div className="bg-card border border-card_border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-text_main mb-3">Funil de Vendas</h2>
-          <PieChart
-            data={statusFunil.slice(0, 6)}
-            nameKey="tipo"
-            valueKey="qtd_documentos"
-            showValue={false}
-            height={220}
-          />
-        </div>
-
-        {/* Conversão por vendedor */}
-        <div className="bg-card border border-card_border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-text_main mb-3">Conversão por Vendedor</h2>
+        {/* Funil de Conversão — BarChart horizontal */}
+        <div className="flex-1 bg-card border border-card_border rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[10px] font-bold text-subtext uppercase tracking-widest">
+              Funil de Conversão
+            </span>
+            <div className="flex-1 h-px bg-card_border" />
+            <span className="text-[9px] text-subtext">mês atual</span>
+          </div>
           <BarChart
-            data={filteredConv.slice(0, 10)}
-            xKey="Vendedor"
-            bars={[
-              { key: 'orcamentos', label: 'Orçamentos' },
-              { key: 'convertidos', label: 'Convertidos' },
-            ]}
-            stacked={false}
-            height={220}
+            data={funilEtapas}
+            xKey="etapa"
+            bars={[{ key: 'qtd', label: 'Documentos' }]}
+            horizontal={true}
+            height={180}
+          />
+          <p className="text-center text-xs text-subtext mt-2">
+            Taxa de conversão:{' '}
+            <span className="font-semibold text-text_main">{pct(taxaConv)}</span>
+          </p>
+        </div>
+
+        {/* Resultado do Período — PieChart */}
+        <div className="w-[42%] bg-card border border-card_border rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-[10px] font-bold text-subtext uppercase tracking-widest">
+              Resultado do Período
+            </span>
+            <div className="flex-1 h-px bg-card_border" />
+          </div>
+          <PieChart
+            data={distribuicao}
+            nameKey="status"
+            valueKey="qtd"
+            showValue={false}
+            colors={['#238636', '#d29922', '#da3633']}
+            height={180}
           />
         </div>
-      </div>
 
-      {/* Clientes inativos */}
-      <div className="bg-card border border-card_border rounded-lg p-4">
-        <h2 className="text-sm font-semibold text-text_main mb-3">
-          Clientes Inativos ({inativos.length})
-        </h2>
-        <DataTable columns={INAT_COLS} rows={inativos} />
       </div>
     </div>
   );
