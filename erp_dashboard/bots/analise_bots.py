@@ -1989,11 +1989,32 @@ class BotCRM(BaseBot):
         """, params)
 
         base = self.analisar()
-        base["total_orcamentos"]   = _safe_int(df_conv, "total_orcamentos")
-        base["total_convertidos"]  = _safe_int(df_conv, "total_convertidos")
-        base["taxa_conversao_pct"] = round(_safe_float(df_conv, "taxa_conversao_pct"), 1)
-        base["valor_orcado"]       = _safe_float(df_conv, "valor_orcado")
-        base["valor_convertido"]   = _safe_float(df_conv, "valor_convertido")
+        _orc  = _safe_int(df_conv, "total_orcamentos")
+        _conv = _safe_int(df_conv, "total_convertidos")
+        _vlro = _safe_float(df_conv, "valor_orcado")
+        _vlrc = _safe_float(df_conv, "valor_convertido")
+        _taxa = round(_safe_float(df_conv, "taxa_conversao_pct"), 1)
+        _tick = round(_vlrc / _conv, 2) if _conv > 0 else 0.0
+        _canc = 0  # cancelados não é refiltrado por vendedor/marca
+        _ativ = max(_orc - _conv - _canc, 0)
+        _total_d = _orc if _orc > 0 else 1
+
+        base["total_orcamentos"]   = _orc
+        base["total_convertidos"]  = _conv
+        base["taxa_conversao_pct"] = _taxa
+        base["valor_orcado"]       = _vlro
+        base["valor_convertido"]   = _vlrc
+        base["ticket_medio"]       = _tick
+        base["distribuicao"] = [
+            {"status": "Convertidos",   "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
+            {"status": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
+            {"status": "Cancelados",    "qtd": _canc, "pct": round(_canc / _total_d * 100, 1)},
+        ]
+        base["funil_etapas"] = [
+            {"etapa": "Propostas",     "qtd": _orc,  "pct": 100},
+            {"etapa": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
+            {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
+        ]
         return base
 
 
