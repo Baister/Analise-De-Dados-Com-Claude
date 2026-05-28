@@ -1,32 +1,106 @@
 import { useMemo } from 'react';
 import { useFilteredDados } from '../hooks/useApi';
 import { useMetas } from '../hooks/useMetas';
-import KpiCard from '../components/KpiCard';
 import BarChart from '../charts/BarChart';
 import AreaChart from '../charts/AreaChart';
 import DataTable from '../components/DataTable';
 import { brl, shortBrl, pct, fmtDate } from '../utils/format';
 
-function fmtDelta(delta, unit = '') {
-  if (delta === 0 || delta == null) return null;
-  const abs = Math.abs(delta);
-  return delta > 0 ? `↑ +${abs}${unit} vs mês ant.` : `↓ ${abs}${unit} vs mês ant.`;
+// ── Color tokens ──────────────────────────────────────────────────
+const C = {
+  page:   '#0f172a',
+  card:   '#1e293b',
+  border: '#334155',
+  cyan:   '#06b6d4',
+  green:  '#22c55e',
+  amber:  '#f59e0b',
+  red:    '#ef4444',
+  text:   '#f1f5f9',
+  sub:    '#94a3b8',
+  muted:  '#64748b',
+};
+
+// ── Mini components ───────────────────────────────────────────────
+function SectionLabel({ children, right }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+      <span style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '1px' }}>
+        {children}
+      </span>
+      <div style={{ flex: 1, height: 1, background: C.border }} />
+      {right && <span style={{ fontSize: 9, color: C.muted }}>{right}</span>}
+    </div>
+  );
 }
 
+function Card({ children, style }) {
+  return (
+    <div style={{
+      background: C.card,
+      border: `1px solid ${C.border}`,
+      borderRadius: 8,
+      padding: 16,
+      ...style,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+function DeltaBadge({ delta, unit = '' }) {
+  if (delta === 0 || delta == null) return null;
+  const pos = delta > 0;
+  return (
+    <div style={{
+      background: pos ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)',
+      color: pos ? C.green : C.red,
+      borderRadius: 4,
+      padding: '2px 8px',
+      fontSize: 11,
+      marginTop: 6,
+      display: 'inline-block',
+    }}>
+      {pos ? '↑ +' : '↓ '}{Math.abs(delta)}{unit} vs mês ant.
+    </div>
+  );
+}
+
+// ── Column definitions ────────────────────────────────────────────
 const RANKING_COLS = [
-  { key: 'Vendedor',        label: 'Vendedor' },
-  { key: 'propostas',       label: 'Propostas',   render: v => String(v ?? 0) },
-  { key: 'convertidos',     label: 'Convertidos', render: v => String(v ?? 0) },
-  { key: 'taxa_conv',       label: 'Taxa',        render: v => pct(v ?? 0) },
-  { key: 'valor_convertido',label: 'Valor',       render: v => shortBrl(v) },
-  { key: 'ticket_medio',    label: 'Ticket',      render: v => shortBrl(v) },
-  { key: 'cancelados',      label: 'Cancelados',  render: v => String(v ?? 0) },
-  { key: '_pct_meta',       label: '% Meta',      render: v => v != null ? pct(v) : '—' },
+  { key: 'Vendedor',         label: 'Vendedor' },
+  { key: 'propostas',        label: 'Propostas',  render: v => String(v ?? 0) },
+  { key: 'convertidos',      label: 'Conv.',      render: v => String(v ?? 0) },
+  { key: 'taxa_conv',        label: 'Taxa',       render: v => {
+    const n = v ?? 0;
+    const color = n >= 40 ? C.green : n >= 25 ? C.amber : C.red;
+    return <span style={{ color, fontWeight: 600 }}>{pct(n)}</span>;
+  }},
+  { key: 'valor_convertido', label: 'Valor',      render: v => shortBrl(v) },
+  { key: 'ticket_medio',     label: 'Ticket',     render: v => shortBrl(v) },
+  { key: 'cancelados',       label: 'Canc.',      render: v => {
+    const n = v ?? 0;
+    return <span style={{ color: n > 0 ? C.red : C.muted }}>{String(n)}</span>;
+  }},
+  { key: '_pct_meta',        label: '% Meta',     render: v => {
+    if (v == null) return <span style={{ color: C.muted }}>—</span>;
+    const [color, bg] = v >= 80
+      ? [C.cyan,  'rgba(6,182,212,0.15)']
+      : v >= 60
+        ? [C.amber, 'rgba(245,158,11,0.15)']
+        : [C.red,   'rgba(239,68,68,0.15)'];
+    return (
+      <span style={{ background: bg, color, borderRadius: 4, padding: '1px 6px', fontSize: 11 }}>
+        {pct(v)}
+      </span>
+    );
+  }},
 ];
 
 const RISCO_COLS = [
-  { key: 'nome_cliente',   label: 'Cliente' },
-  { key: 'dias_inativo',   label: 'Dias',          render: v => String(v ?? 0) },
+  { key: 'nome_cliente',    label: 'Cliente' },
+  { key: 'dias_inativo',   label: 'Dias',          render: v => (
+    <span style={{ color: C.amber, fontWeight: 600 }}>{String(v ?? 0)}</span>
+  )},
   { key: 'ultimo_vendedor', label: 'Ult. Vendedor' },
 ];
 
@@ -39,12 +113,16 @@ const TOP_COLS = [
 
 const INAT_COLS = [
   { key: 'nome_cliente',          label: 'Cliente' },
-  { key: 'dias_inativo',          label: 'Dias',          render: v => String(v ?? 0) },
-  { key: 'ultima_compra',         label: 'Última Compra', render: v => fmtDate(v) },
+  { key: 'dias_inativo',          label: 'Dias',           render: v => {
+    const n = v ?? 0;
+    return <span style={{ color: n > 180 ? C.red : C.amber, fontWeight: 600 }}>{String(n)}</span>;
+  }},
+  { key: 'ultima_compra',         label: 'Última Compra',  render: v => fmtDate(v) },
   { key: 'ultimo_vendedor',       label: 'Ult. Vendedor' },
   { key: 'faturamento_historico', label: 'Fat. Histórico', render: v => brl(v) },
 ];
 
+// ── Main component ────────────────────────────────────────────────
 export default function CRM({ refreshTrigger }) {
   const { data, loading, error, isEmpty } = useFilteredDados('crm', {}, refreshTrigger);
   const { metas } = useMetas();
@@ -67,162 +145,144 @@ export default function CRM({ refreshTrigger }) {
     () => data?.cancelados_por_vendedor ?? [],
     [data]
   );
+
   const rankingComCanc = useMemo(() => {
     const cancMap = Object.fromEntries(canceladosVend.map(r => [r.Vendedor, r.cancelados]));
     return rankingComMeta.map(r => ({ ...r, cancelados: cancMap[r.Vendedor] ?? 0 }));
   }, [rankingComMeta, canceladosVend]);
 
+  // ── Guards ────────────────────────────────────────────────────
   if (loading && !data) return (
-    <div className="flex items-center justify-center h-64 text-subtext text-sm">
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 256, color: C.muted, fontSize: 14 }}>
       Carregando dados de CRM…
     </div>
   );
   if (error && !data) return (
-    <div className="flex items-center justify-center h-64 text-accent_red text-sm">
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 256, color: C.red, fontSize: 14 }}>
       Erro ao carregar dados: {error}
     </div>
   );
   if (isEmpty) return (
-    <div className="flex items-center justify-center h-64 text-subtext text-sm">
-      <div className="text-center space-y-1">
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 256, color: C.muted, fontSize: 14 }}>
+      <div style={{ textAlign: 'center' }}>
         <p>Bot CRM está processando dados do banco…</p>
-        <p className="text-xs opacity-60">A página atualiza automaticamente quando concluir.</p>
+        <p style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>A página atualiza automaticamente quando concluir.</p>
       </div>
     </div>
   );
 
-  const taxaConv   = data?.taxa_conversao_pct ?? 0;
-  const deltaTaxa  = data?.delta_taxa_conv    ?? null;
-  const taxaVariant = taxaConv >= 40 ? 'success' : taxaConv >= 25 ? 'warning' : 'error';
+  // ── KPI values ────────────────────────────────────────────────
+  const taxaConv  = data?.taxa_conversao_pct ?? 0;
+  const deltaTaxa = data?.delta_taxa_conv    ?? null;
+  const pipeline  = data?.valor_orcado       ?? 0;
+  const deltaPipe = data?.delta_valor_orcado ?? null;
+  const qtdInat   = data?.qtd_inativos       ?? 0;
+  const qtdRisco  = data?.qtd_em_risco       ?? 0;
+  const taxaColor = taxaConv >= 40 ? C.green : taxaConv >= 25 ? C.amber : C.red;
 
   return (
-    <div className="p-6 space-y-4">
+    <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-text_main">Performance Comercial</h1>
+      {/* ── Header ───────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <h1 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: 0 }}>
+          Performance Comercial
+        </h1>
         {data?.ultimo_update && (
-          <span className="text-subtext text-xs">Atualizado: {data.ultimo_update}</span>
+          <span style={{ fontSize: 11, color: C.muted }}>Atualizado: {data.ultimo_update}</span>
         )}
       </div>
 
-      {/* 4 KPI cards */}
-      <div className="grid grid-cols-4 gap-3">
-        <KpiCard
-          label="Taxa de Conversão"
-          value={pct(taxaConv)}
-          sub={fmtDelta(deltaTaxa, 'pp')}
-          variant={taxaVariant}
-          topBorder="#1f6feb"
-        />
-        <KpiCard
-          label="Clientes Inativos"
-          value={String(data?.qtd_inativos ?? 0)}
-          variant="warning"
-          topBorder="#d29922"
-        />
-        <KpiCard
-          label="Em Risco"
-          value={String(data?.qtd_em_risco ?? 0)}
-          variant="warning"
-          topBorder="#da3633"
-        />
-        <KpiCard
-          label="Top Clientes"
-          value={String(data?.qtd_ativos_mes ?? 0)}
-          variant="success"
-          topBorder="#238636"
-        />
+      {/* ── 4 KPI cards ──────────────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
+
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.cyan}`, borderRadius: 8, padding: '14px 16px' }}>
+          <div style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 4 }}>Taxa de Conversão</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: taxaColor }}>{pct(taxaConv)}</div>
+          <DeltaBadge delta={deltaTaxa} unit="pp" />
+        </div>
+
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.red}`, borderRadius: 8, padding: '14px 16px' }}>
+          <div style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 4 }}>Clientes Inativos</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: C.red }}>{qtdInat}</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>sem compra &gt;90 dias</div>
+        </div>
+
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.amber}`, borderRadius: 8, padding: '14px 16px' }}>
+          <div style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 4 }}>Em Risco</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: C.amber }}>{qtdRisco}</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>60–90 dias sem compra</div>
+        </div>
+
+        <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: '14px 16px' }}>
+          <div style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 4 }}>Pipeline R$</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: C.text }}>{shortBrl(pipeline)}</div>
+          <DeltaBadge delta={deltaPipe != null ? Math.round(deltaPipe / 1000) : null} unit="k" />
+        </div>
+
       </div>
 
-      {/* Ranking de Vendedores */}
-      <div className="bg-card border border-card_border rounded-lg p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-[10px] font-bold text-subtext uppercase tracking-widest">
-            Ranking de Vendedores
-          </span>
-          <div className="flex-1 h-px bg-card_border" />
-          <span className="text-[9px] text-subtext">mês atual</span>
-        </div>
+      {/* ── Ranking de Vendedores (full width) ───────────────── */}
+      <Card>
+        <SectionLabel right="mês atual">Ranking de Vendedores</SectionLabel>
         <DataTable columns={RANKING_COLS} rows={rankingComCanc} />
+      </Card>
+
+      {/* ── Middle grid: 55/45 ───────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '55fr 45fr', gap: 12 }}>
+
+        {/* Left: Top Clientes + Em Risco */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Card>
+            <SectionLabel>Top Clientes do Mês</SectionLabel>
+            <DataTable columns={TOP_COLS} rows={data?.top_clientes ?? []} />
+          </Card>
+          <Card>
+            <SectionLabel>Clientes em Risco</SectionLabel>
+            <DataTable columns={RISCO_COLS} rows={(data?.clientes_risco ?? []).slice(0, 10)} />
+          </Card>
+        </div>
+
+        {/* Right: Charts */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Card>
+            <SectionLabel>Convertidos vs Cancelados</SectionLabel>
+            <BarChart
+              data={rankingComCanc.slice(0, 8)}
+              xKey="Vendedor"
+              bars={[
+                { key: 'convertidos', label: 'Convertidos' },
+                { key: 'cancelados',  label: 'Cancelados'  },
+              ]}
+              colors={[C.green, C.red]}
+              stacked={false}
+              height={180}
+            />
+          </Card>
+          <Card>
+            <SectionLabel>Evolução Semanal</SectionLabel>
+            <AreaChart
+              data={data?.evolucao_semanal ?? []}
+              xKey="inicio_semana"
+              areas={[
+                { key: 'propostas',   label: 'Propostas'   },
+                { key: 'convertidos', label: 'Convertidos' },
+              ]}
+              colors={[C.cyan, C.green]}
+              height={180}
+            />
+          </Card>
+        </div>
+
       </div>
 
-      {/* Charts row */}
-      <div className="flex gap-3 items-start">
-        {/* Convertidos vs Cancelados */}
-        <div className="flex-1 bg-card border border-card_border rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[10px] font-bold text-subtext uppercase tracking-widest">
-              Convertidos vs Cancelados
-            </span>
-            <div className="flex-1 h-px bg-card_border" />
-          </div>
-          <BarChart
-            data={rankingComCanc.slice(0, 8)}
-            xKey="Vendedor"
-            bars={[
-              { key: 'convertidos', label: 'Convertidos' },
-              { key: 'cancelados',  label: 'Cancelados' },
-            ]}
-            stacked={false}
-            height={200}
-          />
-        </div>
-
-        {/* Evolução Semanal */}
-        <div className="w-[42%] bg-card border border-card_border rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[10px] font-bold text-subtext uppercase tracking-widest">
-              Evolução Semanal
-            </span>
-            <div className="flex-1 h-px bg-card_border" />
-          </div>
-          <AreaChart
-            data={data?.evolucao_semanal ?? []}
-            xKey="inicio_semana"
-            areas={[
-              { key: 'propostas',   label: 'Propostas' },
-              { key: 'convertidos', label: 'Convertidos' },
-            ]}
-            height={200}
-          />
-        </div>
-      </div>
-
-      {/* Top Clientes + Em Risco */}
-      <div className="flex gap-3 items-start">
-        <div className="flex-1 bg-card border border-card_border rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[10px] font-bold text-subtext uppercase tracking-widest">
-              Top Clientes do Mês
-            </span>
-            <div className="flex-1 h-px bg-card_border" />
-          </div>
-          <DataTable columns={TOP_COLS} rows={data?.top_clientes ?? []} />
-        </div>
-
-        <div className="flex-1 bg-card border border-card_border rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[10px] font-bold text-subtext uppercase tracking-widest">
-              Clientes em Risco
-            </span>
-            <div className="flex-1 h-px bg-card_border" />
-          </div>
-          <DataTable columns={RISCO_COLS} rows={(data?.clientes_risco ?? []).slice(0, 10)} />
-        </div>
-      </div>
-
-      {/* Inativos com último vendedor */}
-      <div className="bg-card border border-card_border rounded-lg p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-[10px] font-bold text-subtext uppercase tracking-widest">
-            Clientes Inativos — Último Vendedor
-          </span>
-          <div className="flex-1 h-px bg-card_border" />
-          <span className="text-[9px] text-subtext">{data?.inativos_lista?.length ?? 0} clientes</span>
-        </div>
+      {/* ── Clientes Inativos (full width) ───────────────────── */}
+      <Card>
+        <SectionLabel right={`${data?.inativos_lista?.length ?? 0} clientes`}>
+          Clientes Inativos — Último Vendedor
+        </SectionLabel>
         <DataTable columns={INAT_COLS} rows={(data?.inativos_lista ?? []).slice(0, 50)} />
-      </div>
+      </Card>
 
     </div>
   );
