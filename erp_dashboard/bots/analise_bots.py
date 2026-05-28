@@ -1796,19 +1796,21 @@ class BotCRM(BaseBot):
         """)
 
         # ── Cancelados por vendedor ───────────────────────────────
-        # Cancelados não devem ser buscados via vmVndDoc+vwVndDoc (join NrDoc+NSUDoc)
-        # porque o registro de cancelamento em vwVndDoc tem NSUDoc diferente do
-        # registro original em vmVndDoc — o INNER JOIN retorna 0 linhas.
-        # Solução: consultar vwVndDoc diretamente com DataEmissao como filtro de data.
+        # vwVndDoc registra cancelamentos com NSUDoc novo (nota de cancelamento).
+        # O join padrão NrDoc+NSUDoc não encontra esses registros porque o NSUDoc
+        # do cancelamento em vwVndDoc difere do NSUDoc original em vmVndDoc.
+        # Solução: join somente em NrDoc; COUNT(DISTINCT NrDoc) evita duplicatas
+        # caso um mesmo NrDoc tenha múltiplas entradas em vwVndDoc.
         df_canc_vend = db.query(f"""
             SELECT TOP 20
-                Vendedor,
-                COUNT(*) AS cancelados
-            FROM Blue.dbo.vwVndDoc WITH (NOLOCK)
-            WHERE DataEmissao >= {_MES_INI}
-              AND DataEmissao <  {_MES_FIM}
-              AND TipoMovimento = '1.5-Documentos Cancelados'
-            GROUP BY Vendedor
+                v.Vendedor,
+                COUNT(DISTINCT v.NrDoc) AS cancelados
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc
+            WHERE d.TipoMovimento = '1.5-Documentos Cancelados'
+              AND v.DtVnd >= {_MES_INI}
+              AND v.DtVnd <  {_MES_FIM}
+            GROUP BY v.Vendedor
             ORDER BY cancelados DESC
         """)
 
@@ -1829,7 +1831,9 @@ class BotCRM(BaseBot):
             ORDER BY valor_mes DESC
         """)
 
-        # ── Clientes em risco (>= DIAS_INATIVO dias sem compra, baseado em GETDATE()) ──
+        # ── Clientes em risco (60–90 dias sem compra a partir de GETDATE()) ──────
+        # Janela: [hoje-90d, hoje-60d] — clientes que não compram neste intervalo
+        # estão próximos de cruzar o limiar de inatividade (DIAS_INATIVO=90d).
         # WHERE limita a 2 anos para evitar timeout (GROUP BY sem filtro → HYT00)
         df_risco = db.query(f"""
             SELECT TOP {MAX}
@@ -1842,7 +1846,7 @@ class BotCRM(BaseBot):
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
             WHERE v.DtVnd >= DATEADD(year, -2, GETDATE())
             GROUP BY v.CodCli
-            HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) >= {DIAS_INATIVO}
+            HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) BETWEEN {DIAS_RISCO} AND {DIAS_INATIVO}
             ORDER BY dias_inativo DESC
         """)
 
