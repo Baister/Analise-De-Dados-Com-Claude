@@ -1756,13 +1756,15 @@ class BotCRM(BaseBot):
         """)
 
         # ── Cancelamentos do mês atual ────────────────────────────
+        # vwVndDoc.Cancelado = '*' é o discriminador direto de cancelados.
+        # Não depende de vmVndDoc — orçamentos cancelados antes de virar NF
+        # existem só em vwVndDoc, nunca em vmVndDoc.
         df_cancelados = db.query(f"""
-            SELECT COUNT(DISTINCT v.NrDoc) AS cancelados
-            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE v.DtVnd >= {_MES_INI}
-              AND v.DtVnd <  {_MES_FIM}
-              AND d.TipoMovimento = '1.5-Documentos Cancelados'
+            SELECT COUNT(*) AS cancelados
+            FROM Blue.dbo.vwVndDoc WITH (NOLOCK)
+            WHERE DataEmissao >= {_MES_INI}
+              AND DataEmissao <  {_MES_FIM}
+              AND Cancelado = '*'
         """)
 
         # ── Ranking de vendedores ─────────────────────────────────
@@ -1796,21 +1798,24 @@ class BotCRM(BaseBot):
         """)
 
         # ── Cancelados por vendedor ───────────────────────────────
-        # vwVndDoc registra cancelamentos com NSUDoc novo (nota de cancelamento).
-        # O join padrão NrDoc+NSUDoc não encontra esses registros porque o NSUDoc
-        # do cancelamento em vwVndDoc difere do NSUDoc original em vmVndDoc.
-        # Solução: join somente em NrDoc; COUNT(DISTINCT NrDoc) evita duplicatas
-        # caso um mesmo NrDoc tenha múltiplas entradas em vwVndDoc.
+        # Cancelados existem em vwVndDoc (Cancelado='*') mas podem NÃO existir em
+        # vmVndDoc (ex.: orçamentos cancelados antes de emitir NF). Qualquer join
+        # com vmVndDoc perde esses docs. Abordagem: query direta em vwVndDoc,
+        # nome do vendedor via CodFuncVnd → CodVend (lookup de vmVndDoc).
         df_canc_vend = db.query(f"""
             SELECT TOP 20
-                v.Vendedor,
-                COUNT(DISTINCT v.NrDoc) AS cancelados
-            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc
-            WHERE d.TipoMovimento = '1.5-Documentos Cancelados'
-              AND v.DtVnd >= {_MES_INI}
-              AND v.DtVnd <  {_MES_FIM}
-            GROUP BY v.Vendedor
+                vn.Vendedor,
+                COUNT(*) AS cancelados
+            FROM Blue.dbo.vwVndDoc d WITH (NOLOCK)
+            INNER JOIN (
+                SELECT DISTINCT CodVend, MAX(Vendedor) AS Vendedor
+                FROM Blue.dbo.vmVndDoc WITH (NOLOCK)
+                GROUP BY CodVend
+            ) vn ON d.CodFuncVnd = vn.CodVend
+            WHERE d.DataEmissao >= {_MES_INI}
+              AND d.DataEmissao <  {_MES_FIM}
+              AND d.Cancelado = '*'
+            GROUP BY vn.Vendedor
             ORDER BY cancelados DESC
         """)
 
