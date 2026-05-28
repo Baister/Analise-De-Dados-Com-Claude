@@ -1796,16 +1796,19 @@ class BotCRM(BaseBot):
         """)
 
         # ── Cancelados por vendedor ───────────────────────────────
+        # Cancelados não devem ser buscados via vmVndDoc+vwVndDoc (join NrDoc+NSUDoc)
+        # porque o registro de cancelamento em vwVndDoc tem NSUDoc diferente do
+        # registro original em vmVndDoc — o INNER JOIN retorna 0 linhas.
+        # Solução: consultar vwVndDoc diretamente com DataEmissao como filtro de data.
         df_canc_vend = db.query(f"""
             SELECT TOP 20
-                v.Vendedor,
+                Vendedor,
                 COUNT(*) AS cancelados
-            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE d.TipoMovimento = '1.5-Documentos Cancelados'
-              AND v.DtVnd >= {_MES_INI}
-              AND v.DtVnd <  {_MES_FIM}
-            GROUP BY v.Vendedor
+            FROM Blue.dbo.vwVndDoc WITH (NOLOCK)
+            WHERE DataEmissao >= {_MES_INI}
+              AND DataEmissao <  {_MES_FIM}
+              AND TipoMovimento = '1.5-Documentos Cancelados'
+            GROUP BY Vendedor
             ORDER BY cancelados DESC
         """)
 
@@ -1826,7 +1829,7 @@ class BotCRM(BaseBot):
             ORDER BY valor_mes DESC
         """)
 
-        # ── Clientes em risco (60–89 dias sem compra) ─────────────
+        # ── Clientes em risco (>= DIAS_INATIVO dias sem compra, baseado em GETDATE()) ──
         # WHERE limita a 2 anos para evitar timeout (GROUP BY sem filtro → HYT00)
         df_risco = db.query(f"""
             SELECT TOP {MAX}
@@ -1839,7 +1842,7 @@ class BotCRM(BaseBot):
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
             WHERE v.DtVnd >= DATEADD(year, -2, GETDATE())
             GROUP BY v.CodCli
-            HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) BETWEEN {DIAS_RISCO} AND {DIAS_INATIVO - 1}
+            HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) >= {DIAS_INATIVO}
             ORDER BY dias_inativo DESC
         """)
 
