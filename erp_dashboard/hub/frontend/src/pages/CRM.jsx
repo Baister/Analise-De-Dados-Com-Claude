@@ -62,7 +62,10 @@ export default function CRM({ refreshTrigger }) {
     });
   }, [data, mIndividuais]);
 
-  const canceladosVend = data?.cancelados_por_vendedor ?? [];
+  const canceladosVend = useMemo(
+    () => data?.cancelados_por_vendedor ?? [],
+    [data]
+  );
   const rankingComCanc = useMemo(() => {
     const cancMap = Object.fromEntries(canceladosVend.map(r => [r.Vendedor, r.cancelados]));
     return rankingComMeta.map(r => ({ ...r, cancelados: cancMap[r.Vendedor] ?? 0 }));
@@ -176,7 +179,7 @@ export default function CRM({ refreshTrigger }) {
           <AreaChart
             data={data?.evolucao_semanal ?? []}
             xKey="semana"
-            lines={[
+            areas={[
               { key: 'propostas',   label: 'Propostas' },
               { key: 'convertidos', label: 'Convertidos' },
             ]}
