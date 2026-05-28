@@ -1758,22 +1758,31 @@ class BotCRM(BaseBot):
         """)
 
         # ── Ranking de vendedores ─────────────────────────────────
+        # NrOrcPedVnd (TbOrcPedVnd) != NrDoc (vmVndDoc — numeração NF).
+        # Join direto não funciona; usar vmVndDoc+vwVndDoc como df_top_cli.
+        # propostas = todos os docs do mês; convertidos = apenas faturados.
         df_ranking = db.query(f"""
             SELECT TOP 20
                 v.Vendedor,
-                COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END) AS propostas,
-                COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS convertidos,
-                CAST(COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS FLOAT) /
-                    NULLIF(COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END), 0) * 100 AS taxa_conv,
-                SUM(CASE WHEN o.OrcPedVnd = 2 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido,
-                CASE WHEN COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) > 0
-                     THEN SUM(CASE WHEN o.OrcPedVnd = 2 THEN o.ValTotalOrcPedVnd ELSE 0 END) /
-                          COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END)
+                COUNT(DISTINCT v.NrDoc) AS propostas,
+                COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                    THEN v.NrDoc END) AS convertidos,
+                CAST(COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                         THEN v.NrDoc END) AS FLOAT) /
+                    NULLIF(COUNT(DISTINCT v.NrDoc), 0) * 100 AS taxa_conv,
+                SUM(CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                         THEN v.ValVndTotal ELSE 0 END) AS valor_convertido,
+                CASE WHEN COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                              THEN v.NrDoc END) > 0
+                     THEN SUM(CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                   THEN v.ValVndTotal ELSE 0 END) /
+                          COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                              THEN v.NrDoc END)
                      ELSE 0 END AS ticket_medio
-            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vmVndDoc v WITH (NOLOCK) ON o.NrOrcPedVnd = v.NrDoc
-            WHERE o.DtOrcPedVnd >= {_MES_INI}
-              AND o.DtOrcPedVnd <  {_MES_FIM}
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE v.DtVnd >= {_MES_INI}
+              AND v.DtVnd <  {_MES_FIM}
             GROUP BY v.Vendedor
             ORDER BY valor_convertido DESC
         """)
@@ -1810,6 +1819,7 @@ class BotCRM(BaseBot):
         """)
 
         # ── Clientes em risco (60–89 dias sem compra) ─────────────
+        # WHERE limita a 2 anos para evitar timeout (GROUP BY sem filtro → HYT00)
         df_risco = db.query(f"""
             SELECT TOP {MAX}
                 v.CodCli,
@@ -1819,12 +1829,14 @@ class BotCRM(BaseBot):
                 (SELECT TOP 1 v2.Vendedor FROM Blue.dbo.vmVndDoc v2 WITH (NOLOCK)
                  WHERE v2.CodCli = v.CodCli ORDER BY v2.DtVnd DESC) AS ultimo_vendedor
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            WHERE v.DtVnd >= DATEADD(year, -2, GETDATE())
             GROUP BY v.CodCli
             HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) BETWEEN {DIAS_RISCO} AND {DIAS_INATIVO - 1}
             ORDER BY dias_inativo DESC
         """)
 
         # ── Clientes inativos com último vendedor (>= DIAS_INATIVO) ──
+        # WHERE limita a 2 anos para evitar timeout (GROUP BY sem filtro → HYT00)
         df_inativos_v = db.query(f"""
             SELECT TOP {MAX}
                 v.CodCli,
@@ -1835,6 +1847,7 @@ class BotCRM(BaseBot):
                 (SELECT TOP 1 v2.Vendedor FROM Blue.dbo.vmVndDoc v2 WITH (NOLOCK)
                  WHERE v2.CodCli = v.CodCli ORDER BY v2.DtVnd DESC) AS ultimo_vendedor
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            WHERE v.DtVnd >= DATEADD(year, -2, GETDATE())
             GROUP BY v.CodCli
             HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) >= {DIAS_INATIVO}
             ORDER BY dias_inativo DESC
