@@ -20,6 +20,7 @@ const RANKING_COLS = [
   { key: 'taxa_conv',       label: 'Taxa',        render: v => pct(v ?? 0) },
   { key: 'valor_convertido',label: 'Valor',       render: v => shortBrl(v) },
   { key: 'ticket_medio',    label: 'Ticket',      render: v => shortBrl(v) },
+  { key: 'cancelados',      label: 'Cancelados',  render: v => String(v ?? 0) },
   { key: '_pct_meta',       label: '% Meta',      render: v => v != null ? pct(v) : '—' },
 ];
 
@@ -127,7 +128,7 @@ export default function CRM({ refreshTrigger }) {
           topBorder="#da3633"
         />
         <KpiCard
-          label="Ativos no Mês"
+          label="Top Clientes"
           value={String(data?.qtd_ativos_mes ?? 0)}
           variant="success"
           topBorder="#238636"
@@ -178,7 +179,7 @@ export default function CRM({ refreshTrigger }) {
           </div>
           <AreaChart
             data={data?.evolucao_semanal ?? []}
-            xKey="semana"
+            xKey="inicio_semana"
             areas={[
               { key: 'propostas',   label: 'Propostas' },
               { key: 'convertidos', label: 'Convertidos' },
