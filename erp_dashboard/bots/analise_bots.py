@@ -1757,6 +1757,103 @@ class BotCRM(BaseBot):
               AND d.Cancelado <> ''
         """)
 
+        # ── Ranking de vendedores ─────────────────────────────────
+        df_ranking = db.query(f"""
+            SELECT TOP 20
+                v.Vendedor,
+                COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END) AS propostas,
+                COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS convertidos,
+                CAST(COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS FLOAT) /
+                    NULLIF(COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END), 0) * 100 AS taxa_conv,
+                SUM(CASE WHEN o.OrcPedVnd = 2 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido,
+                CASE WHEN COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) > 0
+                     THEN SUM(CASE WHEN o.OrcPedVnd = 2 THEN o.ValTotalOrcPedVnd ELSE 0 END) /
+                          COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END)
+                     ELSE 0 END AS ticket_medio
+            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vmVndDoc v WITH (NOLOCK) ON o.NrOrcPedVnd = v.NrDoc
+            WHERE o.DtOrcPedVnd >= {_MES_INI}
+              AND o.DtOrcPedVnd <  {_MES_FIM}
+            GROUP BY v.Vendedor
+            ORDER BY valor_convertido DESC
+        """)
+
+        # ── Cancelados por vendedor ───────────────────────────────
+        df_canc_vend = db.query(f"""
+            SELECT TOP 20
+                v.Vendedor,
+                COUNT(*) AS cancelados
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE d.TipoMovimento = '1.5-Documentos Cancelados'
+              AND v.DtVnd >= {_MES_INI}
+              AND v.DtVnd <  {_MES_FIM}
+            GROUP BY v.Vendedor
+            ORDER BY cancelados DESC
+        """)
+
+        # ── Top clientes do mês ───────────────────────────────────
+        df_top_cli = db.query(f"""
+            SELECT TOP 10
+                v.CodCli,
+                MAX(v.NomeFantCli) AS nome_cliente,
+                MAX(v.Vendedor)    AS vendedor,
+                COUNT(DISTINCT v.NrDoc) AS pedidos,
+                SUM(v.ValVndTotal)      AS valor_mes
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+              AND v.DtVnd >= {_MES_INI}
+              AND v.DtVnd <  {_MES_FIM}
+            GROUP BY v.CodCli
+            ORDER BY valor_mes DESC
+        """)
+
+        # ── Clientes em risco (60–89 dias sem compra) ─────────────
+        df_risco = db.query(f"""
+            SELECT TOP {MAX}
+                v.CodCli,
+                MAX(v.NomeFantCli) AS nome_cliente,
+                MAX(v.DtVnd)       AS ultima_compra,
+                DATEDIFF(day, MAX(v.DtVnd), GETDATE()) AS dias_inativo,
+                (SELECT TOP 1 v2.Vendedor FROM Blue.dbo.vmVndDoc v2 WITH (NOLOCK)
+                 WHERE v2.CodCli = v.CodCli ORDER BY v2.DtVnd DESC) AS ultimo_vendedor
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            GROUP BY v.CodCli
+            HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) BETWEEN {DIAS_RISCO} AND {DIAS_INATIVO - 1}
+            ORDER BY dias_inativo DESC
+        """)
+
+        # ── Clientes inativos com último vendedor (>= DIAS_INATIVO) ──
+        df_inativos_v = db.query(f"""
+            SELECT TOP {MAX}
+                v.CodCli,
+                MAX(v.NomeFantCli) AS nome_cliente,
+                MAX(v.DtVnd)       AS ultima_compra,
+                DATEDIFF(day, MAX(v.DtVnd), GETDATE()) AS dias_inativo,
+                SUM(v.ValVndTotal) AS faturamento_historico,
+                (SELECT TOP 1 v2.Vendedor FROM Blue.dbo.vmVndDoc v2 WITH (NOLOCK)
+                 WHERE v2.CodCli = v.CodCli ORDER BY v2.DtVnd DESC) AS ultimo_vendedor
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            GROUP BY v.CodCli
+            HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) >= {DIAS_INATIVO}
+            ORDER BY dias_inativo DESC
+        """)
+
+        # ── Evolução semanal (últimas 4 semanas corridas) ─────────
+        df_evolucao = db.query(f"""
+            SELECT
+                DATEPART(week, DtOrcPedVnd) AS semana,
+                MIN(DtOrcPedVnd)            AS inicio_semana,
+                COUNT(CASE WHEN OrcPedVnd = 1 THEN 1 END) AS propostas,
+                COUNT(CASE WHEN OrcPedVnd = 2 THEN 1 END) AS convertidos
+            FROM Blue.dbo.TbOrcPedVnd WITH (NOLOCK)
+            WHERE DtOrcPedVnd >= DATEADD(week, -4, GETDATE())
+              AND DtOrcPedVnd <  {_MES_FIM}
+            GROUP BY DATEPART(week, DtOrcPedVnd)
+            ORDER BY semana
+        """)
+
         # ── Funil por Vendedor e Marca ────────────────────────────
         df_conv_vend = db.query(f"""
             SELECT TOP 20
@@ -1899,34 +1996,27 @@ class BotCRM(BaseBot):
         em_risco = df_inativos[df_inativos["dias_sem_compra"].between(DIAS_RISCO, DIAS_INATIVO - 1)] if not df_inativos.empty else pd.DataFrame()
         inativos = df_inativos[df_inativos["dias_sem_compra"] >= DIAS_INATIVO] if not df_inativos.empty else pd.DataFrame()
 
-        # ── Derivados mês atual ───────────────────────────────────
+        # ── Derivados ─────────────────────────────────────────────
         _orc  = _safe_int(df_conv, "total_orcamentos")
         _conv = _safe_int(df_conv, "total_convertidos")
         _vlro = _safe_float(df_conv, "valor_orcado")
         _vlrc = _safe_float(df_conv, "valor_convertido")
         _taxa = round(_safe_float(df_conv, "taxa_conversao_pct"), 1)
         _tick = round(_vlrc / _conv, 2) if _conv > 0 else 0.0
-
         _canc = _safe_int(df_cancelados, "cancelados") if not df_cancelados.empty else 0
         _ativ = max(_orc - _conv - _canc, 0)
-
-        # Derivados mês anterior
         _orc_ant  = _safe_int(df_anterior, "total_orc_ant")
         _conv_ant = _safe_int(df_anterior, "total_conv_ant")
         _vlro_ant = _safe_float(df_anterior, "valor_orc_ant")
         _taxa_ant = round((_conv_ant / _orc_ant * 100) if _orc_ant > 0 else 0.0, 1)
         _delta_taxa  = round(_taxa - _taxa_ant, 1)
         _delta_vlro  = round(_vlro - _vlro_ant, 2)
-
-        # Distribuição de resultados (proxy motivos de perda)
         _total_d = _orc if _orc > 0 else 1
         _distribuicao = [
             {"status": "Convertidos",   "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
             {"status": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
             {"status": "Cancelados",    "qtd": _canc, "pct": round(_canc / _total_d * 100, 1)},
         ]
-
-        # Funil de etapas (para BarChart horizontal)
         _funil_etapas = [
             {"etapa": "Propostas",     "qtd": _orc,  "pct": 100},
             {"etapa": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
@@ -1934,30 +2024,35 @@ class BotCRM(BaseBot):
         ]
 
         return {
-            # KPIs principais
+            # KPIs
             "total_orcamentos":   _orc,
             "total_convertidos":  _conv,
             "taxa_conversao_pct": _taxa,
             "valor_orcado":       _vlro,
             "valor_convertido":   _vlrc,
-            # Novas chaves analíticas
             "ticket_medio":       _tick,
             "delta_taxa_conv":    _delta_taxa,
             "delta_valor_orcado": _delta_vlro,
             "taxa_conversao_ant": _taxa_ant,
             "valor_orcado_ant":   _vlro_ant,
-            "distribuicao":       _distribuicao,
-            "funil_etapas":       _funil_etapas,
-            # Chaves mantidas para compatibilidade
-            "funil":              df_funil.to_dict("records"),
-            "conv_por_vendedor":  df_conv_vend.to_dict("records"),
-            "inativos_lista":     df_inativos.to_dict("records"),
-            "faixas_inatividade": df_faixas.to_dict("records"),
-            "qtd_em_risco":       len(em_risco),
-            "qtd_inativos":       len(inativos),
-            "tipo_clientes_30d":  df_tipo_cli.to_dict("records"),
-            "meta_vendedor":      meta_cats,
-            "ultimo_update":      datetime.now().strftime("%H:%M:%S"),
+            "qtd_inativos":       len(df_inativos_v),
+            "qtd_em_risco":       len(df_risco),
+            "qtd_ativos_mes":     len(df_top_cli),
+            # Tabelas novas
+            "ranking_vendedores":      df_ranking.to_dict("records"),
+            "cancelados_por_vendedor": df_canc_vend.to_dict("records"),
+            "top_clientes":            df_top_cli.to_dict("records"),
+            "clientes_risco":          df_risco.to_dict("records"),
+            "inativos_lista":          df_inativos_v.to_dict("records"),
+            "evolucao_semanal":        df_evolucao.to_dict("records"),
+            # Gráficos mantidos
+            "distribuicao":            _distribuicao,
+            "funil_etapas":            _funil_etapas,
+            # Compatibilidade
+            "funil":                   df_funil.to_dict("records"),
+            "conv_por_vendedor":       df_conv_vend.to_dict("records"),
+            "meta_vendedor":           meta_cats,
+            "ultimo_update":           datetime.now().strftime("%H:%M:%S"),
         }
 
     def analisar_filtrado(self, filtros: dict) -> dict:
@@ -2015,6 +2110,10 @@ class BotCRM(BaseBot):
             {"etapa": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
             {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
         ]
+        base["qtd_inativos"]   = base.get("qtd_inativos", 0)
+        base["qtd_em_risco"]   = base.get("qtd_em_risco", 0)
+        base["qtd_ativos_mes"] = base.get("qtd_ativos_mes", 0)
+        # Tabelas não são refiltradas por vendedor/marca (retornam da base)
         return base
 
 
