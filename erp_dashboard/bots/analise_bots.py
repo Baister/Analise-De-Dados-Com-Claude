@@ -1722,39 +1722,47 @@ class BotCRM(BaseBot):
 
     def analisar(self) -> dict:
         # ── KPIs de conversão do mês ──────────────────────────────
+        # Usa vmVndDoc+vwVndDoc (mesmo padrão de df_ranking) para evitar
+        # taxa >100% que ocorria com TbOrcPedVnd (orçamentos criados em meses
+        # anteriores aparecem como OrcPedVnd=2 no mês atual, inflando conversões).
         df_conv = db.query(f"""
             SELECT
-                COUNT(CASE WHEN OrcPedVnd = 1 THEN 1 END)  AS total_orcamentos,
-                COUNT(CASE WHEN OrcPedVnd = 2 THEN 1 END)  AS total_convertidos,
-                CAST(COUNT(CASE WHEN OrcPedVnd = 2 THEN 1 END) AS FLOAT) /
-                    NULLIF(COUNT(CASE WHEN OrcPedVnd = 1 THEN 1 END), 0) * 100
-                                                             AS taxa_conversao_pct,
-                SUM(CASE WHEN OrcPedVnd = 1 THEN ValTotalOrcPedVnd ELSE 0 END) AS valor_orcado,
-                SUM(CASE WHEN OrcPedVnd = 2 THEN ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido
-            FROM Blue.dbo.TbOrcPedVnd WITH (NOLOCK)
-            WHERE DtOrcPedVnd >= {_MES_INI}
-              AND DtOrcPedVnd <  {_MES_FIM}
+                COUNT(DISTINCT v.NrDoc) AS total_orcamentos,
+                COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                    THEN v.NrDoc END) AS total_convertidos,
+                CAST(COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                         THEN v.NrDoc END) AS FLOAT) /
+                    NULLIF(COUNT(DISTINCT v.NrDoc), 0) * 100 AS taxa_conversao_pct,
+                SUM(v.ValVndTotal) AS valor_orcado,
+                SUM(CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                         THEN v.ValVndTotal ELSE 0 END) AS valor_convertido
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE v.DtVnd >= {_MES_INI}
+              AND v.DtVnd <  {_MES_FIM}
         """)
 
         # ── KPIs do mês anterior (para deltas) ───────────────────
         df_anterior = db.query(f"""
             SELECT
-                COUNT(CASE WHEN OrcPedVnd = 1 THEN 1 END) AS total_orc_ant,
-                COUNT(CASE WHEN OrcPedVnd = 2 THEN 1 END) AS total_conv_ant,
-                SUM(CASE WHEN OrcPedVnd = 1 THEN ValTotalOrcPedVnd ELSE 0 END) AS valor_orc_ant
-            FROM Blue.dbo.TbOrcPedVnd WITH (NOLOCK)
-            WHERE DtOrcPedVnd >= {_MES_INI_ANT}
-              AND DtOrcPedVnd <  {_MES_FIM_ANT}
+                COUNT(DISTINCT v.NrDoc) AS total_orc_ant,
+                COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                    THEN v.NrDoc END) AS total_conv_ant,
+                SUM(v.ValVndTotal) AS valor_orc_ant
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE v.DtVnd >= {_MES_INI_ANT}
+              AND v.DtVnd <  {_MES_FIM_ANT}
         """)
 
         # ── Cancelamentos do mês atual ────────────────────────────
         df_cancelados = db.query(f"""
-            SELECT COUNT(*) AS cancelados
-            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON o.NrOrcPedVnd = d.NrDoc
-            WHERE o.DtOrcPedVnd >= {_MES_INI}
-              AND o.DtOrcPedVnd <  {_MES_FIM}
-              AND d.Cancelado <> ''
+            SELECT COUNT(DISTINCT v.NrDoc) AS cancelados
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE v.DtVnd >= {_MES_INI}
+              AND v.DtVnd <  {_MES_FIM}
+              AND d.TipoMovimento = '1.5-Documentos Cancelados'
         """)
 
         # ── Ranking de vendedores ─────────────────────────────────
