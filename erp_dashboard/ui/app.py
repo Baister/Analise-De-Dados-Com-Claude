@@ -1138,10 +1138,27 @@ class TelaCRM(ctk.CTkFrame):
             vs  = [float(r.get("qtd_documentos", 0) or 0) for r in funil]
             self.g_funil.barras(lbs, vs)
 
-        faixas = dados.get("faixas_inatividade", [])
-        if faixas:
-            lbs = [str(r.get("faixa", "?")) for r in faixas]
-            vs  = [float(r.get("qtd_clientes", 0) or 0) for r in faixas]
+        # faixas_inatividade was removed from the bot return dict (CRM v2).
+        # Derive equivalent buckets from clientes_risco + inativos_lista instead.
+        _risco_list = dados.get("clientes_risco", [])
+        _inat_list  = dados.get("inativos_lista", [])
+        _faixas_der = []
+        if _risco_list or _inat_list:
+            def _bucket(dias):
+                if dias < 180:
+                    return "Inativo (<180d)"
+                if dias < 365:
+                    return "Crítico (180-364d)"
+                return "Perdido (365d+)"
+            _cnt: dict = {"Em Risco": len(_risco_list)}
+            for r in _inat_list:
+                b = _bucket(float(r.get("dias_inativo", 0) or 0))
+                _cnt[b] = _cnt.get(b, 0) + 1
+            _faixas_der = [{"faixa": k, "qtd_clientes": v}
+                           for k, v in _cnt.items() if v > 0]
+        if _faixas_der:
+            lbs = [r["faixa"] for r in _faixas_der]
+            vs  = [float(r["qtd_clientes"]) for r in _faixas_der]
             self.g_faixas.barras(lbs, vs, cor=C["warning"])
 
         mv = dados.get("meta_vendedor", [])
