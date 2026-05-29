@@ -25,11 +25,11 @@ const C = {
 function SectionLabel({ children, right }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
-      <span style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '1px' }}>
+      <span style={{ fontSize: 11, fontWeight: 600, color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '1px' }}>
         {children}
       </span>
       <div style={{ flex: 1, height: 1, background: C.border }} />
-      {right && <span style={{ fontSize: 9, color: C.muted }}>{right}</span>}
+      {right && <span style={{ fontSize: 10, color: C.sub }}>{right}</span>}
     </div>
   );
 }
