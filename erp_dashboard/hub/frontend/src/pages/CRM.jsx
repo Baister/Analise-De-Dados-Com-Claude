@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useFilteredDados } from '../hooks/useApi';
 import { useMetas } from '../hooks/useMetas';
 import BarChart from '../charts/BarChart';
@@ -232,14 +232,15 @@ export default function CRM({ refreshTrigger }) {
   const [inatPage,      setInatPage]      = useState(0);
 
   const anosInat = useMemo(() => {
+    const sel = selectedVendedor.trim().toLowerCase();
     const anos = new Set(
-      (data?.inativos_lista ?? []).map(r => {
-        const m = String(r.ultima_compra ?? '').match(/^(\d{4})/);
-        return m ? m[1] : null;
-      }).filter(Boolean)
+      (data?.inativos_lista ?? [])
+        .filter(r => !sel || (r.ultimo_vendedor ?? '').trim().toLowerCase() === sel)
+        .map(r => { const m = String(r.ultima_compra ?? '').match(/^(\d{4})/); return m ? m[1] : null; })
+        .filter(Boolean)
     );
     return [...anos].sort().reverse();
-  }, [data]);
+  }, [data, selectedVendedor]);
 
   const inatFiltrados = useMemo(() => {
     const sel = selectedVendedor.trim().toLowerCase();
@@ -286,6 +287,8 @@ export default function CRM({ refreshTrigger }) {
   function setRiscoMax(v) { setRiscoFiltroMax(v); setRiscoPage(0); }
   function setRiscoCod(v) { setRiscoFiltroCod(v); setRiscoPage(0); }
 
+  useEffect(() => { setInatPage(0); setRiscoPage(0); }, [selectedVendedor]);
+
   const rankingComMeta = useMemo(() => {
     const sel = selectedVendedor.trim().toLowerCase();
     const rows = (data?.ranking_vendedores ?? []).map(r => {
@@ -312,6 +315,23 @@ export default function CRM({ refreshTrigger }) {
     return rankingComMeta.map(r => ({ ...r, cancelados: cancMap[r.Vendedor] ?? 0 }));
   }, [rankingComMeta, canceladosVend]);
 
+  // Contagens escopadas por vendedor — null quando sem filtro (usa o KPI global do bot)
+  const qtdRiscoVend = useMemo(() => {
+    if (!selectedVendedor) return null;
+    const sel = selectedVendedor.trim().toLowerCase();
+    return (data?.clientes_risco ?? []).filter(
+      r => (r.ultimo_vendedor ?? '').trim().toLowerCase() === sel
+    ).length;
+  }, [data, selectedVendedor]);
+
+  const qtdInatVend = useMemo(() => {
+    if (!selectedVendedor) return null;
+    const sel = selectedVendedor.trim().toLowerCase();
+    return (data?.inativos_lista ?? []).filter(
+      r => (r.ultimo_vendedor ?? '').trim().toLowerCase() === sel
+    ).length;
+  }, [data, selectedVendedor]);
+
   // ── Guards ────────────────────────────────────────────────────
   if (loading && !data) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 256, color: C.muted, fontSize: 14 }}>
@@ -337,8 +357,12 @@ export default function CRM({ refreshTrigger }) {
   const deltaTaxa = data?.delta_taxa_conv    ?? null;
   const pipeline  = data?.valor_orcado       ?? 0;
   const deltaPipe = data?.delta_valor_orcado ?? null;
-  const qtdInat   = data?.qtd_inativos       ?? 0;
-  const qtdRisco  = data?.qtd_em_risco       ?? 0;
+  // Quando vendedor selecionado: usa contagem da tabela filtrada; senão usa KPI global do bot
+  const qtdInat   = qtdInatVend  ?? (data?.qtd_inativos ?? 0);
+  const qtdRisco  = qtdRiscoVend ?? (data?.qtd_em_risco  ?? 0);
+  // Denominadores "X de Y" nas seções — escopados pelo vendedor selecionado
+  const riscoTotal = qtdRiscoVend ?? (data?.clientes_risco?.length ?? 0);
+  const inatTotal  = qtdInatVend  ?? (data?.inativos_lista?.length  ?? 0);
   const taxaColor = taxaConv >= 40 ? C.green : taxaConv >= 25 ? C.amber : C.red;
 
   return (
@@ -511,7 +535,7 @@ export default function CRM({ refreshTrigger }) {
 
       {/* ── Clientes em Risco (full width) ───────────────────── */}
       <Card>
-        <SectionLabel right={`${riscoFiltrados.length} de ${data?.clientes_risco?.length ?? 0} clientes`}>
+        <SectionLabel right={`${riscoFiltrados.length} de ${riscoTotal} clientes`}>
           Clientes em Risco
         </SectionLabel>
 
@@ -574,7 +598,7 @@ export default function CRM({ refreshTrigger }) {
 
       {/* ── Clientes Inativos (full width) ───────────────────── */}
       <Card>
-        <SectionLabel right={`${inatFiltrados.length} de ${data?.inativos_lista?.length ?? 0} clientes`}>
+        <SectionLabel right={`${inatFiltrados.length} de ${inatTotal} clientes`}>
           Clientes Inativos — Último Vendedor
         </SectionLabel>
 
