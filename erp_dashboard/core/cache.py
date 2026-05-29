@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import threading
+import datetime as _dt
 from datetime import datetime
 
 from config.settings import CACHE_DB_PATH
@@ -11,7 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 def _clean_nan(obj):
-    """Recursively replace float NaN/Inf with None so json.dumps produces valid JSON."""
+    """Recursively replace float NaN/Inf with None and datetime objects with ISO strings."""
+    if isinstance(obj, _dt.datetime):
+        return obj.isoformat()
+    if isinstance(obj, _dt.date):
+        return obj.isoformat()
     if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
         return None
     if isinstance(obj, dict):
