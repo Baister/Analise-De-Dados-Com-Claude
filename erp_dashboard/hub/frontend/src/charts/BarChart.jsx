@@ -22,6 +22,7 @@ function Empty() {
 
 // bars: [{ key, label?, formatter? }]
 // tooltipExtra: [{ key, label?, formatter? }] — aparece no tooltip sem barra visual
+// xFormatter: função opcional para formatar labels do eixo X (ex: truncar nomes)
 // horizontal: inverte eixos para barras horizontais
 // showLabels: mostra valor ao final da barra
 // stacked: empilha múltiplas barras
@@ -29,7 +30,7 @@ function Empty() {
 export default function BarChart({
   data, xKey, bars = [], horizontal = false, showLabels = false,
   stacked = false, colors = COLORS, height = 220, highlightKey = null,
-  yAxisWidth = 90, tooltipExtra = [],
+  yAxisWidth = 90, tooltipExtra = [], xFormatter,
 }) {
   if (!data?.length || !bars.length) return <Empty />;
 
@@ -73,7 +74,7 @@ export default function BarChart({
           </>
         ) : (
           <>
-            <XAxis dataKey={xKey} tick={TICK} />
+            <XAxis dataKey={xKey} tick={TICK} tickFormatter={xFormatter} />
             <YAxis tick={TICK} tickFormatter={fmt} />
           </>
         )}

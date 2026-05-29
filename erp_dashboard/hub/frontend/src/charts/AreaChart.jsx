@@ -13,7 +13,8 @@ const GRID   = { strokeDasharray: '3 3', stroke: '#30363d' };
 const COLORS = ['#238636', '#da3633', '#1f6feb', '#d29922'];
 
 // areas: [{ key, label?, formatter? }]
-export default function AreaChart({ data, xKey, areas = [], colors = COLORS, height = 220 }) {
+// xFormatter: função opcional para formatar labels do eixo X
+export default function AreaChart({ data, xKey, areas = [], colors = COLORS, height = 220, xFormatter }) {
   if (!data?.length || !areas.length) {
     return (
       <div className="flex items-center justify-center h-[220px] text-subtext text-sm">
@@ -34,7 +35,7 @@ export default function AreaChart({ data, xKey, areas = [], colors = COLORS, hei
           ))}
         </defs>
         <CartesianGrid {...GRID} />
-        <XAxis dataKey={xKey} tick={TICK} />
+        <XAxis dataKey={xKey} tick={TICK} tickFormatter={xFormatter} />
         <YAxis tick={TICK} tickFormatter={fmt} />
         <Tooltip {...TOOLTIP_STYLE} formatter={fmt ? v => [fmt(v)] : undefined} />
         {areas.length > 1 && <Legend wrapperStyle={{ fontSize: 11, color: '#8b949e' }} />}

@@ -307,6 +307,7 @@ export default function CRM({ refreshTrigger }) {
             xKey="Vendedor"
             bars={[{ key: 'ticket_medio', label: 'Ticket Médio', formatter: shortBrl }]}
             tooltipExtra={[{ key: 'convertidos', label: 'Vendas' }]}
+            xFormatter={name => (name ?? '').split(' ')[0]}
             colors={[C.cyan]}
             height={200}
           />
@@ -314,7 +315,7 @@ export default function CRM({ refreshTrigger }) {
 
         <Card>
           <SectionLabel>% de Meta por Vendedor</SectionLabel>
-          <BulletBars rows={rankingComMeta} metas={mIndividuais} />
+          <BulletBars rows={rankingComMeta.slice(0, 8)} metas={mIndividuais} />
         </Card>
 
         <Card>
@@ -384,6 +385,7 @@ export default function CRM({ refreshTrigger }) {
                 { key: 'propostas',   label: 'Propostas'   },
                 { key: 'convertidos', label: 'Convertidos' },
               ]}
+              xFormatter={s => { const m = String(s ?? '').match(/\d{4}-(\d{2})-(\d{2})/); return m ? `${m[2]}/${m[1]}` : (s ?? ''); }}
               colors={[C.cyan, C.green]}
               height={180}
             />
