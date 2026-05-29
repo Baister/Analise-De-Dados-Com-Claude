@@ -75,7 +75,7 @@ function BulletBars({ rows, metas }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, position: 'relative' }}>
       {rows.filter(r => r._pct_meta != null).map((r, i) => {
-        const pct100 = Math.min(r._pct_meta, 120);
+        const barWidth = Math.min(r._pct_meta, 100); // escala 1:1 — 80% meta = barra 80% larga
         const barColor = r._pct_meta >= 80 ? C.green : r._pct_meta >= 60 ? C.amber : C.red;
         const metaVal = Object.entries(metas).find(
           ([k]) => k.trim().toLowerCase() === (r.Vendedor ?? '').trim().toLowerCase()
@@ -96,16 +96,16 @@ function BulletBars({ rows, metas }) {
                 borderRadius: 3, position: 'relative', overflow: 'hidden',
               }}>
                 <div style={{
-                  height: '100%', width: `${pct100 / 1.2}%`,
+                  height: '100%', width: `${barWidth}%`,
                   background: barColor, borderRadius: 3, transition: 'width 0.3s',
                 }} />
                 <div style={{
-                  position: 'absolute', top: 0, left: '66.7%',
+                  position: 'absolute', top: 0, left: '80%',
                   width: 1.5, height: '100%', background: '#f1f5f9', opacity: 0.5,
                 }} />
               </div>
               <span style={{ fontSize: 10, color: barColor, width: 32, textAlign: 'right' }}>
-                {pct100.toFixed(0)}%
+                {r._pct_meta.toFixed(0)}%
               </span>
             </div>
             {hovered === i && (
