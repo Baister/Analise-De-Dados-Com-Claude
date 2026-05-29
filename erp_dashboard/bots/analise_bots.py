@@ -2134,6 +2134,11 @@ class BotCRM(BaseBot):
         base["qtd_inativos"]   = base.get("qtd_inativos", 0)
         base["qtd_em_risco"]   = base.get("qtd_em_risco", 0)
         base["qtd_ativos_mes"] = base.get("qtd_ativos_mes", 0)
+        # Deltas comparam empresa inteira vs. mês anterior; sem significado por vendedor/marca
+        base["delta_taxa_conv"]    = None
+        base["delta_valor_orcado"] = None
+        base["taxa_conversao_ant"] = None
+        base["valor_orcado_ant"]   = None
         # Tabelas não são refiltradas por vendedor/marca (retornam da base)
         return base
 

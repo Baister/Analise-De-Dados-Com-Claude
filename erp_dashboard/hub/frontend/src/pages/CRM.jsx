@@ -315,12 +315,13 @@ export default function CRM({ refreshTrigger }) {
     return rankingComMeta.map(r => ({ ...r, cancelados: cancMap[r.Vendedor] ?? 0 }));
   }, [rankingComMeta, canceladosVend]);
 
-  // Contagens escopadas por vendedor — null quando sem filtro (usa o KPI global do bot)
+  // KPI "Em Risco" — espelha o limiar do bot: dias_inativo >= 60 (DIAS_RISCO)
+  // O array clientes_risco começa em 40 (alerta); contar tudo inflaria o KPI.
   const qtdRiscoVend = useMemo(() => {
     if (!selectedVendedor) return null;
     const sel = selectedVendedor.trim().toLowerCase();
     return (data?.clientes_risco ?? []).filter(
-      r => (r.ultimo_vendedor ?? '').trim().toLowerCase() === sel
+      r => (r.ultimo_vendedor ?? '').trim().toLowerCase() === sel && (r.dias_inativo ?? 0) >= 60
     ).length;
   }, [data, selectedVendedor]);
 
@@ -360,8 +361,12 @@ export default function CRM({ refreshTrigger }) {
   // Quando vendedor selecionado: usa contagem da tabela filtrada; senão usa KPI global do bot
   const qtdInat   = qtdInatVend  ?? (data?.qtd_inativos ?? 0);
   const qtdRisco  = qtdRiscoVend ?? (data?.qtd_em_risco  ?? 0);
-  // Denominadores "X de Y" nas seções — escopados pelo vendedor selecionado
-  const riscoTotal = qtdRiscoVend ?? (data?.clientes_risco?.length ?? 0);
+  // Denominadores "X de Y" — escopados pelo vendedor, mas SEM o limiar >=60 do KPI
+  // (tabela exibe toda a zona 40-90 dias; denominador deve cobrir o mesmo universo)
+  const _riscoSel = selectedVendedor.trim().toLowerCase();
+  const riscoTotal = selectedVendedor
+    ? (data?.clientes_risco ?? []).filter(r => (r.ultimo_vendedor ?? '').trim().toLowerCase() === _riscoSel).length
+    : (data?.clientes_risco?.length ?? 0);
   const inatTotal  = qtdInatVend  ?? (data?.inativos_lista?.length  ?? 0);
   const taxaColor = taxaConv >= 40 ? C.green : taxaConv >= 25 ? C.amber : C.red;
 
