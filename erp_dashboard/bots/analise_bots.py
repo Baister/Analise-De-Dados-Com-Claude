@@ -2050,31 +2050,43 @@ class BotCRM(BaseBot):
         }
 
     def analisar_filtrado(self, filtros: dict) -> dict:
-        parts  = [f"o.DtOrcPedVnd >= {_MES_INI}", f"o.DtOrcPedVnd < {_MES_FIM}"]
+        has_vendedor = bool(filtros.get("vendedor"))
+        has_marca    = bool(filtros.get("marca"))
+
+        if not (has_vendedor or has_marca):
+            return self.analisar()
+
+        # Usa vmVndDoc+vwVndDoc — mesmo padrão da analisar() base.
+        # TbOrcPedVnd.NrOrcPedVnd ≠ vmVndDoc.NrDoc (numerações distintas);
+        # join direto retorna vazio e quebra os KPIs filtrados.
+        parts  = [f"v.DtVnd >= {_MES_INI}", f"v.DtVnd < {_MES_FIM}"]
         params: list = []
-        if filtros.get("vendedor"):
+        if has_vendedor:
             parts.append("v.Vendedor LIKE ?")
             params.append(f"%{filtros['vendedor'][:100]}%")
-        if filtros.get("marca"):
+
+        marca_join = ""
+        if has_marca:
+            marca_join = "INNER JOIN Blue.dbo.vmVndItemDoc i WITH (NOLOCK) ON v.NrDoc = i.NrDoc"
             parts.append("i.DescrMarca LIKE ?")
             params.append(f"%{filtros['marca'][:100]}%")
-
-        if not (filtros.get("vendedor") or filtros.get("marca")):
-            return self.analisar()
 
         where = " AND ".join(parts)
         df_conv = db.query(f"""
             SELECT
-                COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END) AS total_orcamentos,
-                COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS total_convertidos,
-                CAST(COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS FLOAT) /
-                    NULLIF(COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END), 0) * 100 AS taxa_conversao_pct,
-                SUM(CASE WHEN o.OrcPedVnd = 1 THEN i.PrecoVndTotItem ELSE 0 END) AS valor_orcado,
-                SUM(CASE WHEN o.OrcPedVnd = 2 THEN i.PrecoVndTotItem ELSE 0 END) AS valor_convertido
-            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vmVndDoc v     WITH (NOLOCK) ON o.NrOrcPedVnd = v.NrDoc
-            INNER JOIN Blue.dbo.vmVndItemDoc i WITH (NOLOCK) ON o.NrOrcPedVnd = i.NrDoc
-            WHERE {where}
+                COUNT(DISTINCT v.NrDoc) AS total_orcamentos,
+                COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                    THEN v.NrDoc END) AS total_convertidos,
+                CAST(COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                         THEN v.NrDoc END) AS FLOAT) /
+                    NULLIF(COUNT(DISTINCT v.NrDoc), 0) * 100 AS taxa_conversao_pct,
+                SUM(v.ValVndTotal) AS valor_orcado,
+                SUM(CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                         THEN v.ValVndTotal ELSE 0 END) AS valor_convertido
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            {marca_join}
+            WHERE {where} {_EXCLUIR_PLANO}
         """, params)
 
         base = self.analisar()
