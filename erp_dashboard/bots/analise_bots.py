@@ -17,11 +17,12 @@ from core.cache import cache as _cache
 
 logger = logging.getLogger(__name__)
 
-MAX             = ALERTAS.get("query_max_rows", 5000)
-DIAS_RISCO      = ALERTAS.get("cliente_em_risco_dias", 60)
-DIAS_INATIVO    = ALERTAS.get("cliente_inativo_dias", 90)
-DIAS_CRITICO    = ALERTAS.get("estoque_critico_dias_sem_vnd", 90)
-DIAS_LISTA_INAT = 30  # mostra inativos a partir de 30 dias
+MAX               = ALERTAS.get("query_max_rows", 5000)
+DIAS_RISCO        = ALERTAS.get("cliente_em_risco_dias", 60)
+DIAS_INATIVO      = ALERTAS.get("cliente_inativo_dias", 90)
+DIAS_CRITICO      = ALERTAS.get("estoque_critico_dias_sem_vnd", 90)
+DIAS_LISTA_INAT   = 30   # mostra inativos a partir de 30 dias
+DIAS_ALERTA_RISCO = 40   # início da zona de alerta (antes de DIAS_RISCO=60 "risco confirmado")
 _MES_INI        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)"
 _MES_FIM        = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) + 1, 0)"
 _MES_INI_ANT    = "DATEADD(month, DATEDIFF(month, 0, GETDATE()) - 1, 0)"
@@ -1863,7 +1864,7 @@ class BotCRM(BaseBot):
             WHERE v.DtVnd >= DATEADD(day, -{DIAS_INATIVO}, GETDATE())
               {_EXCLUIR_PLANO}
             GROUP BY v.CodCli
-            HAVING MAX(v.DtVnd) < DATEADD(day, -40, GETDATE())
+            HAVING MAX(v.DtVnd) < DATEADD(day, -{DIAS_ALERTA_RISCO}, GETDATE())
             ORDER BY dias_inativo DESC
         """)
 
