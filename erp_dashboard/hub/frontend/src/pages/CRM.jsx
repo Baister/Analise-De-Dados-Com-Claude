@@ -210,9 +210,21 @@ const BTN_STYLE = {
 
 // ── Main component ────────────────────────────────────────────────
 export default function CRM({ refreshTrigger }) {
-  const { data, loading, error, isEmpty } = useFilteredDados('crm', {}, refreshTrigger);
+  // selectedVendedor deve ser declarado ANTES de useFilteredDados (é passado como parâmetro)
+  const [selectedVendedor, setSelectedVendedor] = useState('');
+
+  const { data, loading, error, isEmpty } = useFilteredDados(
+    'crm',
+    selectedVendedor ? { vendedor: selectedVendedor } : {},
+    refreshTrigger
+  );
   const { metas } = useMetas();
   const mIndividuais = metas?.metas_individuais ?? {};
+
+  // Lista de vendedores derivada sempre do resultado base (ranking_vendedores nunca é filtrado pelo bot)
+  const vendedores = useMemo(() => (
+    [...new Set((data?.ranking_vendedores ?? []).map(r => r.Vendedor).filter(Boolean))].sort()
+  ), [data]);
 
   // ── Inativos — filtros e paginação ───────────────────────────
   const [inatFiltroAno, setInatFiltroAno] = useState('');
@@ -230,8 +242,10 @@ export default function CRM({ refreshTrigger }) {
   }, [data]);
 
   const inatFiltrados = useMemo(() => {
+    const sel = selectedVendedor.trim().toLowerCase();
     const cod = inatFiltroCod.trim().toLowerCase();
     return (data?.inativos_lista ?? []).filter(r => {
+      if (sel && (r.ultimo_vendedor ?? '').trim().toLowerCase() !== sel) return false;
       if (inatFiltroAno) {
         const m = String(r.ultima_compra ?? '').match(/^(\d{4})/);
         if (!m || m[1] !== inatFiltroAno) return false;
@@ -239,7 +253,7 @@ export default function CRM({ refreshTrigger }) {
       if (cod && !String(r.CodCli ?? '').toLowerCase().includes(cod)) return false;
       return true;
     });
-  }, [data, inatFiltroAno, inatFiltroCod]);
+  }, [data, inatFiltroAno, inatFiltroCod, selectedVendedor]);
 
   const inatTotalPages = Math.max(1, Math.ceil(inatFiltrados.length / INAT_PAGE_SIZE));
   const inatPageRows   = inatFiltrados.slice(inatPage * INAT_PAGE_SIZE, (inatPage + 1) * INAT_PAGE_SIZE);
@@ -255,14 +269,16 @@ export default function CRM({ refreshTrigger }) {
   const [riscoPage,      setRiscoPage]      = useState(0);
 
   const riscoFiltrados = useMemo(() => {
+    const sel = selectedVendedor.trim().toLowerCase();
     const cod = riscoFiltroCod.trim().toLowerCase();
     const max = riscoFiltroMax ? parseInt(riscoFiltroMax, 10) : 0;
     return (data?.clientes_risco ?? []).filter(r => {
+      if (sel && (r.ultimo_vendedor ?? '').trim().toLowerCase() !== sel) return false;
       if (max > 0 && (r.dias_inativo ?? 0) > max) return false;
       if (cod && !String(r.CodCli ?? '').toLowerCase().includes(cod)) return false;
       return true;
     });
-  }, [data, riscoFiltroMax, riscoFiltroCod]);
+  }, [data, riscoFiltroMax, riscoFiltroCod, selectedVendedor]);
 
   const riscoTotalPages = Math.max(1, Math.ceil(riscoFiltrados.length / RISCO_PAGE_SIZE));
   const riscoPageRows   = riscoFiltrados.slice(riscoPage * RISCO_PAGE_SIZE, (riscoPage + 1) * RISCO_PAGE_SIZE);
@@ -271,8 +287,8 @@ export default function CRM({ refreshTrigger }) {
   function setRiscoCod(v) { setRiscoFiltroCod(v); setRiscoPage(0); }
 
   const rankingComMeta = useMemo(() => {
-    const rows = data?.ranking_vendedores ?? [];
-    return rows.map(r => {
+    const sel = selectedVendedor.trim().toLowerCase();
+    const rows = (data?.ranking_vendedores ?? []).map(r => {
       const meta = Object.entries(mIndividuais).find(
         ([k]) => k.trim().toLowerCase() === (r.Vendedor ?? '').trim().toLowerCase()
       )?.[1];
@@ -281,12 +297,15 @@ export default function CRM({ refreshTrigger }) {
         _pct_meta: meta > 0 ? Math.round((r.valor_convertido ?? 0) / meta * 100) : null,
       };
     });
-  }, [data, mIndividuais]);
+    return sel ? rows.filter(r => (r.Vendedor ?? '').trim().toLowerCase() === sel) : rows;
+  }, [data, mIndividuais, selectedVendedor]);
 
-  const canceladosVend = useMemo(
-    () => data?.cancelados_por_vendedor ?? [],
-    [data]
-  );
+  const canceladosVend = useMemo(() => {
+    const all = data?.cancelados_por_vendedor ?? [];
+    if (!selectedVendedor) return all;
+    const sel = selectedVendedor.trim().toLowerCase();
+    return all.filter(r => (r.Vendedor ?? '').trim().toLowerCase() === sel);
+  }, [data, selectedVendedor]);
 
   const rankingComCanc = useMemo(() => {
     const cancMap = Object.fromEntries(canceladosVend.map(r => [r.Vendedor, r.cancelados]));
@@ -326,13 +345,40 @@ export default function CRM({ refreshTrigger }) {
     <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
 
       {/* ── Header ───────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <h1 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <h1 style={{ fontSize: 20, fontWeight: 700, color: C.text, margin: 0, flexShrink: 0 }}>
           Performance Comercial
         </h1>
-        {data?.ultimo_update && (
-          <span style={{ fontSize: 11, color: C.muted }}>Atualizado: {data.ultimo_update}</span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <select
+            value={selectedVendedor}
+            onChange={e => setSelectedVendedor(e.target.value)}
+            style={{
+              ...CTRL_STYLE,
+              minWidth: 210,
+              fontSize: 12,
+              padding: '6px 10px',
+              borderColor: selectedVendedor ? C.cyan : '#334155',
+              color: selectedVendedor ? C.cyan : '#f1f5f9',
+              fontWeight: selectedVendedor ? 600 : 400,
+            }}
+          >
+            <option value="">Todos os vendedores</option>
+            {vendedores.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          {selectedVendedor && (
+            <button
+              onClick={() => setSelectedVendedor('')}
+              style={{ ...BTN_STYLE, color: C.cyan, borderColor: C.cyan, padding: '5px 12px' }}
+              title="Remover filtro de vendedor"
+            >
+              × Limpar
+            </button>
+          )}
+          {data?.ultimo_update && (
+            <span style={{ fontSize: 11, color: C.muted }}>Atualizado: {data.ultimo_update}</span>
+          )}
+        </div>
       </div>
 
       {/* ── 4 KPI cards ──────────────────────────────────────── */}
@@ -392,7 +438,7 @@ export default function CRM({ refreshTrigger }) {
         </Card>
 
         <Card>
-          <SectionLabel>Faixas de Inatividade</SectionLabel>
+          <SectionLabel right={selectedVendedor ? 'dados globais' : undefined}>Faixas de Inatividade</SectionLabel>
           <ResponsiveContainer width="100%" height={200}>
             <RC
               data={data?.faixas_inatividade ?? []}
@@ -446,7 +492,7 @@ export default function CRM({ refreshTrigger }) {
             />
           </Card>
           <Card>
-            <SectionLabel>Evolução Semanal</SectionLabel>
+            <SectionLabel right={selectedVendedor ? 'dados globais' : undefined}>Evolução Semanal</SectionLabel>
             <AreaChart
               data={data?.evolucao_semanal ?? []}
               xKey="inicio_semana"

@@ -2078,6 +2078,21 @@ class BotCRM(BaseBot):
         """, params)
 
         base = self.analisar()
+
+        # Top Clientes refiltrado por vendedor (a query base usa TOP 10 global)
+        if filtros.get("vendedor"):
+            vend_like = f"%{filtros['vendedor'][:100]}%"
+            df_top_cli_v = db.query(f"""
+                SELECT TOP 10 v.CodCli, MAX(v.NomeFantCli) AS nome_cliente,
+                       MAX(v.Vendedor) AS vendedor,
+                       COUNT(DISTINCT v.NrDoc) AS pedidos, SUM(v.ValVndTotal) AS valor_mes
+                FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                WHERE v.DtVnd >= {_MES_INI} AND v.DtVnd < {_MES_FIM} {_EXCLUIR_PLANO}
+                  AND v.Vendedor LIKE ?
+                GROUP BY v.CodCli ORDER BY valor_mes DESC
+            """, [vend_like])
+            base["top_clientes"] = df_top_cli_v.to_dict("records")
+
         _orc  = _safe_int(df_conv, "total_orcamentos")
         _conv = _safe_int(df_conv, "total_convertidos")
         _vlro = _safe_float(df_conv, "valor_orcado")
