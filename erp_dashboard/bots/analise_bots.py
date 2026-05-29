@@ -1848,9 +1848,9 @@ class BotCRM(BaseBot):
         logger.info("[CRM] df_top_cli: %d linhas%s", len(df_top_cli),
                     f" | erro: {db.last_error}" if db.last_error else "")
 
-        # ── Clientes em risco (60–90 dias sem compra a partir de GETDATE()) ──────
-        # Clientes com pedido nos últimos 90 dias cujo ÚLTIMO pedido foi há >60 dias.
+        # ── Clientes em risco (40–90 dias sem compra a partir de GETDATE()) ──────
         # WHERE filtra só 90 dias de vmVndDoc — muito mais rápido que varrer 2 anos.
+        # HAVING usa -40 para a tabela mostrar 40–90d; KPI qtd_em_risco conta >= DIAS_RISCO (60d).
         df_risco = db.new_conn_query(f"""
             SELECT TOP {MAX}
                 v.CodCli,
@@ -1863,7 +1863,7 @@ class BotCRM(BaseBot):
             WHERE v.DtVnd >= DATEADD(day, -{DIAS_INATIVO}, GETDATE())
               {_EXCLUIR_PLANO}
             GROUP BY v.CodCli
-            HAVING MAX(v.DtVnd) < DATEADD(day, -{DIAS_RISCO}, GETDATE())
+            HAVING MAX(v.DtVnd) < DATEADD(day, -40, GETDATE())
             ORDER BY dias_inativo DESC
         """)
 
@@ -2028,7 +2028,7 @@ class BotCRM(BaseBot):
             "taxa_conversao_ant": _taxa_ant,
             "valor_orcado_ant":   _vlro_ant,
             "qtd_inativos":       len(df_inativos_v),
-            "qtd_em_risco":       len(df_risco),
+            "qtd_em_risco":       int((df_risco["dias_inativo"] >= DIAS_RISCO).sum()) if not df_risco.empty else 0,
             "qtd_ativos_mes":     len(df_top_cli),
             # Tabelas novas
             "ranking_vendedores":      df_ranking.to_dict("records"),

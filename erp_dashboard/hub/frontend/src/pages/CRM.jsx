@@ -166,10 +166,13 @@ const RANKING_COLS = [
 ];
 
 const RISCO_COLS = [
-  { key: 'nome_cliente',    label: 'Cliente' },
-  { key: 'dias_inativo',   label: 'Dias',          render: v => (
-    <span style={{ color: C.amber, fontWeight: 600 }}>{String(v ?? 0)}</span>
-  )},
+  { key: 'CodCli',         label: 'Código',        render: v => <span style={{ color: C.muted, fontFamily: 'monospace' }}>{v ?? '—'}</span> },
+  { key: 'nome_cliente',   label: 'Cliente' },
+  { key: 'dias_inativo',   label: 'Dias',           render: v => {
+    const n = v ?? 0;
+    return <span style={{ color: n >= 80 ? C.red : C.amber, fontWeight: 600 }}>{String(n)}</span>;
+  }},
+  { key: 'ultima_compra',  label: 'Última Compra',  render: v => fmtDate(v) },
   { key: 'ultimo_vendedor', label: 'Ult. Vendedor' },
 ];
 
@@ -192,7 +195,8 @@ const INAT_COLS = [
   { key: 'faturamento_historico', label: 'Fat. Histórico', render: v => brl(v) },
 ];
 
-const INAT_PAGE_SIZE = 50;
+const INAT_PAGE_SIZE  = 50;
+const RISCO_PAGE_SIZE = 25;
 
 const CTRL_STYLE = {
   background: '#0f172a', border: '1px solid #334155', borderRadius: 6,
@@ -242,6 +246,27 @@ export default function CRM({ refreshTrigger }) {
 
   function setFiltroAno(v) { setInatFiltroAno(v); setInatPage(0); }
   function setFiltroCod(v) { setInatFiltroCod(v); setInatPage(0); }
+
+  // ── Clientes em Risco — filtros e paginação ──────────────────
+  const [riscoFiltroMin, setRiscoFiltroMin] = useState('');
+  const [riscoFiltroCod, setRiscoFiltroCod] = useState('');
+  const [riscoPage,      setRiscoPage]      = useState(0);
+
+  const riscoFiltrados = useMemo(() => {
+    const cod = riscoFiltroCod.trim().toLowerCase();
+    const min = riscoFiltroMin ? parseInt(riscoFiltroMin, 10) : 0;
+    return (data?.clientes_risco ?? []).filter(r => {
+      if (min > 0 && (r.dias_inativo ?? 0) < min) return false;
+      if (cod && !String(r.CodCli ?? '').toLowerCase().includes(cod)) return false;
+      return true;
+    });
+  }, [data, riscoFiltroMin, riscoFiltroCod]);
+
+  const riscoTotalPages = Math.max(1, Math.ceil(riscoFiltrados.length / RISCO_PAGE_SIZE));
+  const riscoPageRows   = riscoFiltrados.slice(riscoPage * RISCO_PAGE_SIZE, (riscoPage + 1) * RISCO_PAGE_SIZE);
+
+  function setRiscoMin(v) { setRiscoFiltroMin(v); setRiscoPage(0); }
+  function setRiscoCod(v) { setRiscoFiltroCod(v); setRiscoPage(0); }
 
   const rankingComMeta = useMemo(() => {
     const rows = data?.ranking_vendedores ?? [];
@@ -394,15 +419,11 @@ export default function CRM({ refreshTrigger }) {
       {/* ── Middle grid: 55/45 ───────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: '55fr 45fr', gap: 12 }}>
 
-        {/* Left: Top Clientes + Em Risco */}
+        {/* Left: Top Clientes */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <Card>
             <SectionLabel>Top Clientes do Mês</SectionLabel>
             <DataTable columns={TOP_COLS} rows={data?.top_clientes ?? []} />
-          </Card>
-          <Card>
-            <SectionLabel>Clientes em Risco</SectionLabel>
-            <DataTable columns={RISCO_COLS} rows={(data?.clientes_risco ?? []).slice(0, 10)} />
           </Card>
         </div>
 
@@ -439,6 +460,63 @@ export default function CRM({ refreshTrigger }) {
         </div>
 
       </div>
+
+      {/* ── Clientes em Risco (full width) ───────────────────── */}
+      <Card>
+        <SectionLabel right={`${riscoFiltrados.length} de ${data?.clientes_risco?.length ?? 0} clientes`}>
+          Clientes em Risco
+        </SectionLabel>
+
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <select
+            value={riscoFiltroMin}
+            onChange={e => setRiscoMin(e.target.value)}
+            style={CTRL_STYLE}
+          >
+            <option value="">Todos os dias</option>
+            <option value="40">≥ 40 dias</option>
+            <option value="50">≥ 50 dias</option>
+            <option value="60">≥ 60 dias</option>
+            <option value="70">≥ 70 dias</option>
+            <option value="80">≥ 80 dias</option>
+            <option value="90">≥ 90 dias</option>
+          </select>
+          <input
+            type="text"
+            placeholder="Filtrar por código..."
+            value={riscoFiltroCod}
+            onChange={e => setRiscoCod(e.target.value)}
+            style={{ ...CTRL_STYLE, width: 160 }}
+          />
+          {(riscoFiltroMin || riscoFiltroCod) && (
+            <button
+              onClick={() => { setRiscoMin(''); setRiscoCod(''); }}
+              style={{ ...BTN_STYLE, color: C.amber }}
+            >
+              Limpar filtros
+            </button>
+          )}
+        </div>
+
+        <DataTable columns={RISCO_COLS} rows={riscoPageRows} />
+
+        {riscoTotalPages > 1 && (
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center', marginTop: 14 }}>
+            <button style={{ ...BTN_STYLE, opacity: riscoPage === 0 ? 0.35 : 1 }}
+              disabled={riscoPage === 0} onClick={() => setRiscoPage(0)}>«</button>
+            <button style={{ ...BTN_STYLE, opacity: riscoPage === 0 ? 0.35 : 1 }}
+              disabled={riscoPage === 0} onClick={() => setRiscoPage(p => p - 1)}>‹</button>
+            <span style={{ fontSize: 11, color: C.sub, padding: '0 8px' }}>
+              {riscoPage + 1} / {riscoTotalPages}
+              <span style={{ color: C.muted, marginLeft: 8 }}>({riscoFiltrados.length} registros)</span>
+            </span>
+            <button style={{ ...BTN_STYLE, opacity: riscoPage >= riscoTotalPages - 1 ? 0.35 : 1 }}
+              disabled={riscoPage >= riscoTotalPages - 1} onClick={() => setRiscoPage(p => p + 1)}>›</button>
+            <button style={{ ...BTN_STYLE, opacity: riscoPage >= riscoTotalPages - 1 ? 0.35 : 1 }}
+              disabled={riscoPage >= riscoTotalPages - 1} onClick={() => setRiscoPage(riscoTotalPages - 1)}>»</button>
+          </div>
+        )}
+      </Card>
 
       {/* ── Clientes Inativos (full width) ───────────────────── */}
       <Card>
