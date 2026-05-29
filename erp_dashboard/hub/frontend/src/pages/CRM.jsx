@@ -297,6 +297,51 @@ export default function CRM({ refreshTrigger }) {
         <DataTable columns={RANKING_COLS} rows={rankingComCanc} />
       </Card>
 
+      {/* ── 3 gráficos analíticos ────────────────────────────── */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+
+        <Card>
+          <SectionLabel>Ticket Médio por Vendedor</SectionLabel>
+          <BarChart
+            data={rankingComCanc.slice(0, 8)}
+            xKey="Vendedor"
+            bars={[{ key: 'ticket_medio', label: 'Ticket Médio', formatter: shortBrl }]}
+            colors={[C.cyan]}
+            height={200}
+          />
+        </Card>
+
+        <Card>
+          <SectionLabel>% de Meta por Vendedor</SectionLabel>
+          <BulletBars rows={rankingComMeta} metas={mIndividuais} />
+        </Card>
+
+        <Card>
+          <SectionLabel>Faixas de Inatividade</SectionLabel>
+          <ResponsiveContainer width="100%" height={200}>
+            <RC
+              data={data?.faixas_inatividade ?? []}
+              margin={{ top: 8, right: 16, bottom: 8, left: 8 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+              <XAxis dataKey="faixa" tick={{ fill: C.sub, fontSize: 10 }} />
+              <YAxis tick={{ fill: C.sub, fontSize: 10 }} allowDecimals={false} />
+              <RCTooltip
+                contentStyle={{ background: '#1c2128', border: '1px solid #30363d', borderRadius: 6, fontSize: 12 }}
+                labelStyle={{ color: '#e6edf3' }}
+                itemStyle={{ color: '#8b949e' }}
+              />
+              <Bar dataKey="qtd" name="Clientes" radius={[3, 3, 0, 0]}>
+                {(data?.faixas_inatividade ?? []).map((_, i) => (
+                  <Cell key={i} fill={HIST_COLORS[i] ?? '#ef4444'} />
+                ))}
+              </Bar>
+            </RC>
+          </ResponsiveContainer>
+        </Card>
+
+      </div>
+
       {/* ── Middle grid: 55/45 ───────────────────────────────── */}
       <div style={{ display: 'grid', gridTemplateColumns: '55fr 45fr', gap: 12 }}>
 
