@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useFilteredDados } from '../hooks/useApi';
 import { useMetas } from '../hooks/useMetas';
 import BarChart from '../charts/BarChart';
 import AreaChart from '../charts/AreaChart';
 import DataTable from '../components/DataTable';
+import { BarChart as RC, Bar, XAxis, YAxis, Tooltip as RCTooltip, Cell, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { brl, shortBrl, pct, fmtDate } from '../utils/format';
 
 // ── Color tokens ──────────────────────────────────────────────────
@@ -61,6 +62,74 @@ function DeltaBadge({ delta, unit = '' }) {
       display: 'inline-block',
     }}>
       {pos ? '↑ +' : '↓ '}{Math.abs(delta)}{unit} vs mês ant.
+    </div>
+  );
+}
+
+// ── Histograma de inatividade — cores por faixa ───────────────────
+const HIST_COLORS = ['#f59e0b', '#f97316', '#ef4444', '#7f1d1d'];
+
+// ── Bullet Bars — % de Meta por Vendedor ─────────────────────────
+function BulletBars({ rows, metas }) {
+  const [hovered, setHovered] = useState(null);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, position: 'relative' }}>
+      {rows.filter(r => r._pct_meta != null).map((r, i) => {
+        const pct100 = Math.min(r._pct_meta, 120);
+        const barColor = r._pct_meta >= 80 ? C.green : r._pct_meta >= 60 ? C.amber : C.red;
+        const metaVal = Object.entries(metas).find(
+          ([k]) => k.trim().toLowerCase() === (r.Vendedor ?? '').trim().toLowerCase()
+        )?.[1] ?? 0;
+        return (
+          <div key={r.Vendedor} style={{ position: 'relative' }}
+            onMouseEnter={() => setHovered(i)}
+            onMouseLeave={() => setHovered(null)}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{
+                fontSize: 11, color: C.sub, width: 80,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>
+                {(r.Vendedor ?? '').split(' ')[0]}
+              </span>
+              <div style={{
+                flex: 1, height: 12, background: '#0f172a',
+                borderRadius: 3, position: 'relative', overflow: 'hidden',
+              }}>
+                <div style={{
+                  height: '100%', width: `${pct100 / 1.2}%`,
+                  background: barColor, borderRadius: 3, transition: 'width 0.3s',
+                }} />
+                <div style={{
+                  position: 'absolute', top: 0, left: '66.7%',
+                  width: 1.5, height: '100%', background: '#f1f5f9', opacity: 0.5,
+                }} />
+              </div>
+              <span style={{ fontSize: 10, color: barColor, width: 32, textAlign: 'right' }}>
+                {pct100.toFixed(0)}%
+              </span>
+            </div>
+            {hovered === i && (
+              <div style={{
+                position: 'absolute', left: 88, top: -8, zIndex: 10,
+                background: '#1c2128', border: '1px solid #30363d',
+                borderRadius: 6, fontSize: 11, padding: '8px 12px', color: '#e6edf3',
+                pointerEvents: 'none', whiteSpace: 'nowrap',
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>{r.Vendedor}</div>
+                <div style={{ color: '#8b949e' }}>
+                  Convertido: <span style={{ color: '#e6edf3' }}>{brl(r.valor_convertido ?? 0)}</span>
+                </div>
+                <div style={{ color: '#8b949e' }}>
+                  Meta: <span style={{ color: '#e6edf3' }}>{brl(metaVal)}</span>
+                </div>
+                <div style={{ color: '#8b949e' }}>
+                  Atingimento: <span style={{ color: barColor }}>{r._pct_meta}%</span>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
