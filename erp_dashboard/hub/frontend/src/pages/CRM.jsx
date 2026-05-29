@@ -4,7 +4,7 @@ import { useMetas } from '../hooks/useMetas';
 import BarChart from '../charts/BarChart';
 import AreaChart from '../charts/AreaChart';
 import DataTable from '../components/DataTable';
-import { BarChart as RC, Bar, XAxis, YAxis, Tooltip as RCTooltip, Cell, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { BarChart as RC, Bar, XAxis, YAxis, Tooltip as RCTooltip, Cell, ResponsiveContainer, CartesianGrid, LabelList } from 'recharts';
 import { brl, shortBrl, pct, fmtDate } from '../utils/format';
 
 // ── Color tokens ──────────────────────────────────────────────────
@@ -335,6 +335,7 @@ export default function CRM({ refreshTrigger }) {
                 {(data?.faixas_inatividade ?? []).map((_, i) => (
                   <Cell key={i} fill={HIST_COLORS[i] ?? '#ef4444'} />
                 ))}
+                <LabelList dataKey="qtd" position="top" style={{ fill: '#f1f5f9', fontSize: 11, fontWeight: 700 }} />
               </Bar>
             </RC>
           </ResponsiveContainer>
