@@ -2089,7 +2089,10 @@ class BotCRM(BaseBot):
             WHERE {where} {_EXCLUIR_PLANO}
         """, params)
 
-        base = self.analisar()
+        # Usa o cache do ciclo de polling — evita re-executar analisar() completo
+        # (seria 30-120s a mais por requisição filtrada, causando timeout HTTP).
+        # Fallback para analisar() apenas no startup antes do primeiro polling.
+        base = dict(self.resultado) if self.resultado else self.analisar()
 
         # Top Clientes refiltrado por vendedor (a query base usa TOP 10 global)
         if filtros.get("vendedor"):
@@ -2111,7 +2114,10 @@ class BotCRM(BaseBot):
         _vlrc = _safe_float(df_conv, "valor_convertido")
         _taxa = round(_safe_float(df_conv, "taxa_conversao_pct"), 1)
         _tick = round(_vlrc / _conv, 2) if _conv > 0 else 0.0
-        _canc = 0  # cancelados não é refiltrado por vendedor/marca
+        _canc = 0
+        logger.info("[CRM filtrado] filtros=%s | orc=%d conv=%d taxa=%.1f%% orcado=%.0f%s",
+                    filtros, _orc, _conv, _taxa, _vlro,
+                    f" | erro: {db.last_error}" if db.last_error else "")
         _ativ = max(_orc - _conv - _canc, 0)
         _total_d = _orc if _orc > 0 else 1
 
