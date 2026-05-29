@@ -1740,6 +1740,7 @@ class BotCRM(BaseBot):
             INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
             WHERE v.DtVnd >= {_MES_INI}
               AND v.DtVnd <  {_MES_FIM}
+              {_EXCLUIR_PLANO}
         """)
 
         # ── KPIs do mês anterior (para deltas) ───────────────────
@@ -1753,6 +1754,7 @@ class BotCRM(BaseBot):
             INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
             WHERE v.DtVnd >= {_MES_INI_ANT}
               AND v.DtVnd <  {_MES_FIM_ANT}
+              {_EXCLUIR_PLANO}
         """)
 
         # ── Cancelamentos do mês atual ────────────────────────────
@@ -1793,6 +1795,7 @@ class BotCRM(BaseBot):
             INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
             WHERE v.DtVnd >= {_MES_INI}
               AND v.DtVnd <  {_MES_FIM}
+              {_EXCLUIR_PLANO}
             GROUP BY v.Vendedor
             ORDER BY valor_convertido DESC
         """)
@@ -1832,15 +1835,18 @@ class BotCRM(BaseBot):
             WHERE d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
               AND v.DtVnd >= {_MES_INI}
               AND v.DtVnd <  {_MES_FIM}
+              {_EXCLUIR_PLANO}
             GROUP BY v.CodCli
             ORDER BY valor_mes DESC
         """)
 
+        logger.info("[CRM] df_top_cli: %d linhas%s", len(df_top_cli),
+                    f" | erro: {db.last_error}" if db.last_error else "")
+
         # ── Clientes em risco (60–90 dias sem compra a partir de GETDATE()) ──────
-        # Janela: [hoje-90d, hoje-60d] — clientes que não compram neste intervalo
-        # estão próximos de cruzar o limiar de inatividade (DIAS_INATIVO=90d).
-        # WHERE limita a 2 anos para evitar timeout (GROUP BY sem filtro → HYT00)
-        df_risco = db.query(f"""
+        # Clientes com pedido nos últimos 90 dias cujo ÚLTIMO pedido foi há >60 dias.
+        # WHERE filtra só 90 dias de vmVndDoc — muito mais rápido que varrer 2 anos.
+        df_risco = db.new_conn_query(f"""
             SELECT TOP {MAX}
                 v.CodCli,
                 MAX(v.NomeFantCli) AS nome_cliente,
@@ -1849,15 +1855,19 @@ class BotCRM(BaseBot):
                 (SELECT TOP 1 v2.Vendedor FROM Blue.dbo.vmVndDoc v2 WITH (NOLOCK)
                  WHERE v2.CodCli = v.CodCli ORDER BY v2.DtVnd DESC) AS ultimo_vendedor
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
-            WHERE v.DtVnd >= DATEADD(year, -2, GETDATE())
+            WHERE v.DtVnd >= DATEADD(day, -{DIAS_INATIVO}, GETDATE())
+              {_EXCLUIR_PLANO}
             GROUP BY v.CodCli
-            HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) BETWEEN {DIAS_RISCO} AND {DIAS_INATIVO}
+            HAVING MAX(v.DtVnd) < DATEADD(day, -{DIAS_RISCO}, GETDATE())
             ORDER BY dias_inativo DESC
         """)
 
+        logger.info("[CRM] df_risco: %d linhas%s", len(df_risco),
+                    f" | erro: {db.last_error}" if db.last_error else "")
+
         # ── Clientes inativos com último vendedor (>= DIAS_INATIVO) ──
-        # WHERE limita a 2 anos para evitar timeout (GROUP BY sem filtro → HYT00)
-        df_inativos_v = db.query(f"""
+        # WHERE limita a 2 anos (última compra pode ser antiga); HAVING compara datas.
+        df_inativos_v = db.new_conn_query(f"""
             SELECT TOP {MAX}
                 v.CodCli,
                 MAX(v.NomeFantCli) AS nome_cliente,
@@ -1868,10 +1878,27 @@ class BotCRM(BaseBot):
                  WHERE v2.CodCli = v.CodCli ORDER BY v2.DtVnd DESC) AS ultimo_vendedor
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
             WHERE v.DtVnd >= DATEADD(year, -2, GETDATE())
+              {_EXCLUIR_PLANO}
             GROUP BY v.CodCli
-            HAVING DATEDIFF(day, MAX(v.DtVnd), GETDATE()) >= {DIAS_INATIVO}
+            HAVING MAX(v.DtVnd) < DATEADD(day, -{DIAS_INATIVO}, GETDATE())
             ORDER BY dias_inativo DESC
         """)
+
+        # ── Histograma de faixas de inatividade (sem nova query) ─
+        _FAIXAS_INAT = [
+            (90,  120, "90–120d"),
+            (121, 180, "121–180d"),
+            (181, 365, "181–365d"),
+            (366, 9999, "+365d"),
+        ]
+        if not df_inativos_v.empty and "dias_inativo" in df_inativos_v.columns:
+            _dias = df_inativos_v["dias_inativo"]
+            faixas_inatividade = [
+                {"faixa": label, "qtd": int(((_dias >= lo) & (_dias <= hi)).sum())}
+                for lo, hi, label in _FAIXAS_INAT
+            ]
+        else:
+            faixas_inatividade = [{"faixa": l, "qtd": 0} for _, _, l in _FAIXAS_INAT]
 
         # ── Evolução semanal (últimas 4 semanas corridas) ─────────
         df_evolucao = db.query(f"""
@@ -2004,6 +2031,7 @@ class BotCRM(BaseBot):
             "top_clientes":            df_top_cli.to_dict("records"),
             "clientes_risco":          df_risco.to_dict("records"),
             "inativos_lista":          df_inativos_v.to_dict("records"),
+            "faixas_inatividade":      faixas_inatividade,
             "evolucao_semanal":        df_evolucao.to_dict("records"),
             # Gráficos mantidos
             "distribuicao":            _distribuicao,
