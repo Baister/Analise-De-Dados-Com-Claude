@@ -38,7 +38,10 @@ def _safe_float(df: pd.DataFrame, col: str) -> float:
     if df.empty or col not in df.columns:
         return 0.0
     v = df[col].iloc[0]
-    return float(v) if v is not None else 0.0
+    try:
+        return 0.0 if pd.isna(v) else float(v)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _safe_int(df: pd.DataFrame, col: str) -> int:
@@ -1725,7 +1728,7 @@ class BotCRM(BaseBot):
         # Usa vmVndDoc+vwVndDoc (mesmo padrão de df_ranking) para evitar
         # taxa >100% que ocorria com TbOrcPedVnd (orçamentos criados em meses
         # anteriores aparecem como OrcPedVnd=2 no mês atual, inflando conversões).
-        df_conv = db.query(f"""
+        df_conv = db.new_conn_query(f"""
             SELECT
                 COUNT(DISTINCT v.NrDoc) AS total_orcamentos,
                 COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
@@ -1742,6 +1745,10 @@ class BotCRM(BaseBot):
               AND v.DtVnd <  {_MES_FIM}
               {_EXCLUIR_PLANO}
         """)
+        logger.info("[CRM] df_conv: %d linhas | valor_orcado=%s%s",
+                    len(df_conv),
+                    df_conv["valor_orcado"].iloc[0] if not df_conv.empty else "N/A",
+                    f" | erro: {db.last_error}" if db.last_error else "")
 
         # ── KPIs do mês anterior (para deltas) ───────────────────
         df_anterior = db.query(f"""
@@ -1831,9 +1838,7 @@ class BotCRM(BaseBot):
                 COUNT(DISTINCT v.NrDoc) AS pedidos,
                 SUM(v.ValVndTotal)      AS valor_mes
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
-              AND v.DtVnd >= {_MES_INI}
+            WHERE v.DtVnd >= {_MES_INI}
               AND v.DtVnd <  {_MES_FIM}
               {_EXCLUIR_PLANO}
             GROUP BY v.CodCli
