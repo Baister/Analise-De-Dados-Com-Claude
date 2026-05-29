@@ -181,6 +181,7 @@ const TOP_COLS = [
 ];
 
 const INAT_COLS = [
+  { key: 'CodCli',                label: 'Código',         render: v => <span style={{ color: C.muted, fontFamily: 'monospace' }}>{v ?? '—'}</span> },
   { key: 'nome_cliente',          label: 'Cliente' },
   { key: 'dias_inativo',          label: 'Dias',           render: v => {
     const n = v ?? 0;
@@ -191,11 +192,56 @@ const INAT_COLS = [
   { key: 'faturamento_historico', label: 'Fat. Histórico', render: v => brl(v) },
 ];
 
+const INAT_PAGE_SIZE = 50;
+
+const CTRL_STYLE = {
+  background: '#0f172a', border: '1px solid #334155', borderRadius: 6,
+  color: '#f1f5f9', fontSize: 11, padding: '5px 10px', outline: 'none',
+};
+const BTN_STYLE = {
+  background: '#1e293b', border: '1px solid #334155', borderRadius: 4,
+  color: '#94a3b8', cursor: 'pointer', fontSize: 12, padding: '3px 10px',
+  transition: 'background 0.15s',
+};
+
 // ── Main component ────────────────────────────────────────────────
 export default function CRM({ refreshTrigger }) {
   const { data, loading, error, isEmpty } = useFilteredDados('crm', {}, refreshTrigger);
   const { metas } = useMetas();
   const mIndividuais = metas?.metas_individuais ?? {};
+
+  // ── Inativos — filtros e paginação ───────────────────────────
+  const [inatFiltroAno, setInatFiltroAno] = useState('');
+  const [inatFiltroCod, setInatFiltroCod] = useState('');
+  const [inatPage,      setInatPage]      = useState(0);
+
+  const anosInat = useMemo(() => {
+    const anos = new Set(
+      (data?.inativos_lista ?? []).map(r => {
+        const m = String(r.ultima_compra ?? '').match(/^(\d{4})/);
+        return m ? m[1] : null;
+      }).filter(Boolean)
+    );
+    return [...anos].sort().reverse();
+  }, [data]);
+
+  const inatFiltrados = useMemo(() => {
+    const cod = inatFiltroCod.trim().toLowerCase();
+    return (data?.inativos_lista ?? []).filter(r => {
+      if (inatFiltroAno) {
+        const m = String(r.ultima_compra ?? '').match(/^(\d{4})/);
+        if (!m || m[1] !== inatFiltroAno) return false;
+      }
+      if (cod && !String(r.CodCli ?? '').toLowerCase().includes(cod)) return false;
+      return true;
+    });
+  }, [data, inatFiltroAno, inatFiltroCod]);
+
+  const inatTotalPages = Math.max(1, Math.ceil(inatFiltrados.length / INAT_PAGE_SIZE));
+  const inatPageRows   = inatFiltrados.slice(inatPage * INAT_PAGE_SIZE, (inatPage + 1) * INAT_PAGE_SIZE);
+
+  function setFiltroAno(v) { setInatFiltroAno(v); setInatPage(0); }
+  function setFiltroCod(v) { setInatFiltroCod(v); setInatPage(0); }
 
   const rankingComMeta = useMemo(() => {
     const rows = data?.ranking_vendedores ?? [];
@@ -396,10 +442,56 @@ export default function CRM({ refreshTrigger }) {
 
       {/* ── Clientes Inativos (full width) ───────────────────── */}
       <Card>
-        <SectionLabel right={`${data?.inativos_lista?.length ?? 0} clientes`}>
+        <SectionLabel right={`${inatFiltrados.length} de ${data?.inativos_lista?.length ?? 0} clientes`}>
           Clientes Inativos — Último Vendedor
         </SectionLabel>
-        <DataTable columns={INAT_COLS} rows={(data?.inativos_lista ?? []).slice(0, 50)} />
+
+        {/* Barra de filtros */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+          <select
+            value={inatFiltroAno}
+            onChange={e => setFiltroAno(e.target.value)}
+            style={CTRL_STYLE}
+          >
+            <option value="">Todos os anos</option>
+            {anosInat.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+          <input
+            type="text"
+            placeholder="Filtrar por código..."
+            value={inatFiltroCod}
+            onChange={e => setFiltroCod(e.target.value)}
+            style={{ ...CTRL_STYLE, width: 160 }}
+          />
+          {(inatFiltroAno || inatFiltroCod) && (
+            <button
+              onClick={() => { setFiltroAno(''); setFiltroCod(''); }}
+              style={{ ...BTN_STYLE, color: C.amber }}
+            >
+              Limpar filtros
+            </button>
+          )}
+        </div>
+
+        <DataTable columns={INAT_COLS} rows={inatPageRows} />
+
+        {/* Paginação */}
+        {inatTotalPages > 1 && (
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center', marginTop: 14 }}>
+            <button style={{ ...BTN_STYLE, opacity: inatPage === 0 ? 0.35 : 1 }}
+              disabled={inatPage === 0} onClick={() => setInatPage(0)}>«</button>
+            <button style={{ ...BTN_STYLE, opacity: inatPage === 0 ? 0.35 : 1 }}
+              disabled={inatPage === 0} onClick={() => setInatPage(p => p - 1)}>‹</button>
+            <span style={{ fontSize: 11, color: C.sub, padding: '0 8px' }}>
+              {inatPage + 1} / {inatTotalPages}
+              <span style={{ color: C.muted, marginLeft: 8 }}>({inatFiltrados.length} registros)</span>
+            </span>
+            <button style={{ ...BTN_STYLE, opacity: inatPage >= inatTotalPages - 1 ? 0.35 : 1 }}
+              disabled={inatPage >= inatTotalPages - 1} onClick={() => setInatPage(p => p + 1)}>›</button>
+            <button style={{ ...BTN_STYLE, opacity: inatPage >= inatTotalPages - 1 ? 0.35 : 1 }}
+              disabled={inatPage >= inatTotalPages - 1} onClick={() => setInatPage(inatTotalPages - 1)}>»</button>
+          </div>
+        )}
       </Card>
 
     </div>
