@@ -2089,6 +2089,8 @@ class BotCRM(BaseBot):
             WHERE {where} {_EXCLUIR_PLANO}
         """, params)
 
+        logger.info("[CRM filtrado] iniciando query | filtros=%s", filtros)
+
         # Usa o cache do ciclo de polling — evita re-executar analisar() completo
         # (seria 30-120s a mais por requisição filtrada, causando timeout HTTP).
         # Fallback para analisar() apenas no startup antes do primeiro polling.
@@ -2145,7 +2147,8 @@ class BotCRM(BaseBot):
         base["delta_valor_orcado"] = None
         base["taxa_conversao_ant"] = None
         base["valor_orcado_ant"]   = None
-        # Tabelas não são refiltradas por vendedor/marca (retornam da base)
+        # Marca timestamp atualizado para que o frontend possa confirmar que dados filtrados chegaram
+        base["ultimo_update"] = datetime.now().strftime("%H:%M:%S") + " (f)"
         return base
 
 
