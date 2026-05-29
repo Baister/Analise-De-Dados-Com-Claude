@@ -99,15 +99,19 @@ class DatabaseManager:
                 self._conn = None
                 return pd.DataFrame()
 
-    def new_conn_query(self, sql: str) -> pd.DataFrame:
-        """Execute query on a fresh independent connection — safe for parallel calls."""
+    def new_conn_query(self, sql: str, params=None) -> pd.DataFrame:
+        """Execute query on a fresh independent connection — safe for parallel calls.
+        Does NOT use _lock, so it never blocks on the shared-connection query queue."""
         try:
             conn = pyodbc.connect(self._build_conn_str(), autocommit=True)
             conn.timeout = 90
             conn.execute("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED")
             try:
                 cursor = conn.cursor()
-                cursor.execute(sql)
+                if params is not None:
+                    cursor.execute(sql, params)
+                else:
+                    cursor.execute(sql)
                 if cursor.description is None:
                     return pd.DataFrame()
                 cols = [desc[0] for desc in cursor.description]

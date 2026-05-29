@@ -2072,7 +2072,7 @@ class BotCRM(BaseBot):
             params.append(f"%{filtros['marca'][:100]}%")
 
         where = " AND ".join(parts)
-        df_conv = db.query(f"""
+        df_conv = db.new_conn_query(f"""
             SELECT
                 COUNT(DISTINCT v.NrDoc) AS total_orcamentos,
                 COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
@@ -2097,7 +2097,7 @@ class BotCRM(BaseBot):
         # Top Clientes refiltrado por vendedor (a query base usa TOP 10 global)
         if filtros.get("vendedor"):
             vend_like = f"%{filtros['vendedor'][:100]}%"
-            df_top_cli_v = db.query(f"""
+            df_top_cli_v = db.new_conn_query(f"""
                 SELECT TOP 10 v.CodCli, MAX(v.NomeFantCli) AS nome_cliente,
                        MAX(v.Vendedor) AS vendedor,
                        COUNT(DISTINCT v.NrDoc) AS pedidos, SUM(v.ValVndTotal) AS valor_mes
