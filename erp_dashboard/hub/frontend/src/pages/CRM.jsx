@@ -248,24 +248,26 @@ export default function CRM({ refreshTrigger }) {
   function setFiltroCod(v) { setInatFiltroCod(v); setInatPage(0); }
 
   // ── Clientes em Risco — filtros e paginação ──────────────────
-  const [riscoFiltroMin, setRiscoFiltroMin] = useState('');
+  // riscoFiltroMax: "até X dias" — mostra clientes com dias_inativo <= X
+  // (do dia de hoje até X dias atrás = risco mais recente primeiro)
+  const [riscoFiltroMax, setRiscoFiltroMax] = useState('');
   const [riscoFiltroCod, setRiscoFiltroCod] = useState('');
   const [riscoPage,      setRiscoPage]      = useState(0);
 
   const riscoFiltrados = useMemo(() => {
     const cod = riscoFiltroCod.trim().toLowerCase();
-    const min = riscoFiltroMin ? parseInt(riscoFiltroMin, 10) : 0;
+    const max = riscoFiltroMax ? parseInt(riscoFiltroMax, 10) : 0;
     return (data?.clientes_risco ?? []).filter(r => {
-      if (min > 0 && (r.dias_inativo ?? 0) < min) return false;
+      if (max > 0 && (r.dias_inativo ?? 0) > max) return false;
       if (cod && !String(r.CodCli ?? '').toLowerCase().includes(cod)) return false;
       return true;
     });
-  }, [data, riscoFiltroMin, riscoFiltroCod]);
+  }, [data, riscoFiltroMax, riscoFiltroCod]);
 
   const riscoTotalPages = Math.max(1, Math.ceil(riscoFiltrados.length / RISCO_PAGE_SIZE));
   const riscoPageRows   = riscoFiltrados.slice(riscoPage * RISCO_PAGE_SIZE, (riscoPage + 1) * RISCO_PAGE_SIZE);
 
-  function setRiscoMin(v) { setRiscoFiltroMin(v); setRiscoPage(0); }
+  function setRiscoMax(v) { setRiscoFiltroMax(v); setRiscoPage(0); }
   function setRiscoCod(v) { setRiscoFiltroCod(v); setRiscoPage(0); }
 
   const rankingComMeta = useMemo(() => {
@@ -351,7 +353,7 @@ export default function CRM({ refreshTrigger }) {
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.amber}`, borderRadius: 8, padding: '14px 16px' }}>
           <div style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 4 }}>Em Risco</div>
           <div style={{ fontSize: 22, fontWeight: 700, color: C.amber }}>{qtdRisco}</div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>60–90 dias sem compra</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>60–89 dias sem compra</div>
         </div>
 
         <div style={{ background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.green}`, borderRadius: 8, padding: '14px 16px' }}>
@@ -469,17 +471,17 @@ export default function CRM({ refreshTrigger }) {
 
         <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           <select
-            value={riscoFiltroMin}
-            onChange={e => setRiscoMin(e.target.value)}
+            value={riscoFiltroMax}
+            onChange={e => setRiscoMax(e.target.value)}
             style={CTRL_STYLE}
           >
             <option value="">Todos os dias</option>
-            <option value="40">≥ 40 dias</option>
-            <option value="50">≥ 50 dias</option>
-            <option value="60">≥ 60 dias</option>
-            <option value="70">≥ 70 dias</option>
-            <option value="80">≥ 80 dias</option>
-            <option value="90">≥ 90 dias</option>
+            <option value="40">Até 40 dias</option>
+            <option value="50">Até 50 dias</option>
+            <option value="60">Até 60 dias</option>
+            <option value="70">Até 70 dias</option>
+            <option value="80">Até 80 dias</option>
+            <option value="90">Até 90 dias</option>
           </select>
           <input
             type="text"
@@ -488,9 +490,9 @@ export default function CRM({ refreshTrigger }) {
             onChange={e => setRiscoCod(e.target.value)}
             style={{ ...CTRL_STYLE, width: 160 }}
           />
-          {(riscoFiltroMin || riscoFiltroCod) && (
+          {(riscoFiltroMax || riscoFiltroCod) && (
             <button
-              onClick={() => { setRiscoMin(''); setRiscoCod(''); }}
+              onClick={() => { setRiscoMax(''); setRiscoCod(''); }}
               style={{ ...BTN_STYLE, color: C.amber }}
             >
               Limpar filtros
@@ -498,7 +500,13 @@ export default function CRM({ refreshTrigger }) {
           )}
         </div>
 
-        <DataTable columns={RISCO_COLS} rows={riscoPageRows} />
+        {riscoPageRows.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '32px 0', color: C.muted, fontSize: 13 }}>
+            Nenhum cliente encontrado com estes filtros.
+          </div>
+        ) : (
+          <DataTable columns={RISCO_COLS} rows={riscoPageRows} />
+        )}
 
         {riscoTotalPages > 1 && (
           <div style={{ display: 'flex', gap: 6, justifyContent: 'center', alignItems: 'center', marginTop: 14 }}>
