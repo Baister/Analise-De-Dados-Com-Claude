@@ -306,6 +306,7 @@ export default function CRM({ refreshTrigger }) {
             data={rankingComCanc.slice(0, 8)}
             xKey="Vendedor"
             bars={[{ key: 'ticket_medio', label: 'Ticket Médio', formatter: shortBrl }]}
+            tooltipExtra={[{ key: 'convertidos', label: 'Vendas' }]}
             colors={[C.cyan]}
             height={200}
           />

@@ -21,6 +21,7 @@ function Empty() {
 }
 
 // bars: [{ key, label?, formatter? }]
+// tooltipExtra: [{ key, label?, formatter? }] — aparece no tooltip sem barra visual
 // horizontal: inverte eixos para barras horizontais
 // showLabels: mostra valor ao final da barra
 // stacked: empilha múltiplas barras
@@ -28,11 +29,34 @@ function Empty() {
 export default function BarChart({
   data, xKey, bars = [], horizontal = false, showLabels = false,
   stacked = false, colors = COLORS, height = 220, highlightKey = null,
-  yAxisWidth = 90,
+  yAxisWidth = 90, tooltipExtra = [],
 }) {
   if (!data?.length || !bars.length) return <Empty />;
 
   const fmt = bars[0]?.formatter;
+
+  const customTooltip = tooltipExtra.length ? ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    const row = payload[0]?.payload ?? {};
+    return (
+      <div style={{ background: '#1c2128', border: '1px solid #30363d', borderRadius: 6, fontSize: 12, padding: '8px 12px' }}>
+        <div style={{ color: '#e6edf3', marginBottom: 4, fontWeight: 600 }}>{label}</div>
+        {payload.map(p => {
+          const barDef = bars.find(b => b.key === p.dataKey);
+          return (
+            <div key={p.dataKey} style={{ color: '#8b949e' }}>
+              {p.name}: <span style={{ color: '#e6edf3' }}>{barDef?.formatter ? barDef.formatter(p.value) : p.value}</span>
+            </div>
+          );
+        })}
+        {tooltipExtra.map(extra => (
+          <div key={extra.key} style={{ color: '#8b949e' }}>
+            {extra.label || extra.key}: <span style={{ color: '#e6edf3' }}>{extra.formatter ? extra.formatter(row[extra.key]) : (row[extra.key] ?? '—')}</span>
+          </div>
+        ))}
+      </div>
+    );
+  } : null;
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -53,7 +77,11 @@ export default function BarChart({
             <YAxis tick={TICK} tickFormatter={fmt} />
           </>
         )}
-        <Tooltip {...TOOLTIP_STYLE} formatter={fmt ? v => [fmt(v)] : undefined} />
+        <Tooltip
+          {...TOOLTIP_STYLE}
+          content={customTooltip || undefined}
+          formatter={customTooltip ? undefined : (fmt ? v => [fmt(v)] : undefined)}
+        />
         {bars.length > 1 && <Legend wrapperStyle={{ fontSize: 11, color: '#8b949e' }} />}
         {bars.map((bar, idx) => (
           <Bar
