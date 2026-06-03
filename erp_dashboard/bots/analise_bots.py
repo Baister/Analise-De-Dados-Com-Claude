@@ -436,6 +436,55 @@ class BotDashboard(BaseBot):
                 ) _sub ORDER BY dia
             """, ([f"%{filtros['vendedor'][:100]}%"] if filtros.get("vendedor") else None))
 
+        # ── Novos KPIs filtrados ──────────────────────────────────────
+        vnd_parts  = [f"v.DtVnd >= {_MES_INI}", f"v.DtVnd < {_MES_FIM}"]
+        vnd_params: list = []
+        if filtros.get("vendedor"):
+            vnd_parts.append("v.Vendedor LIKE ?")
+            vnd_params.append(f"%{filtros['vendedor'][:100]}%")
+
+        where_vnd = " AND ".join(vnd_parts)
+
+        df_novos_kpis_f = db.new_conn_query(f"""
+            SELECT
+                SUM(v.ValVndTotal)   AS venda_liq,
+                SUM(v.CustoRepTotal) AS custo_rep_liq,
+                SUM(v.TotalFrete)    AS frete_total
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            WHERE {where_vnd}
+              {_EXCLUIR_PLANO}
+        """, vnd_params if vnd_params else None)
+
+        dev_parts  = [f"d.DtVnd >= {_MES_INI}", f"d.DtVnd < {_MES_FIM}",
+                      "d.CodPlanoVnd NOT IN ('004','012','025','027')"]
+        dev_params: list = []
+        if filtros.get("vendedor"):
+            dev_parts.append("d.Vendedor LIKE ?")
+            dev_params.append(f"%{filtros['vendedor'][:100]}%")
+
+        df_dev_f = db.new_conn_query(f"""
+            SELECT SUM(d.ValTotItem) AS devolucoes_total
+            FROM Blue.dbo.vmMetricasMotivoDevItem d WITH (NOLOCK)
+            WHERE {" AND ".join(dev_parts)}
+        """, dev_params if dev_params else None)
+
+        df_canc_f = db.new_conn_query(f"""
+            SELECT SUM(d.ValTotalNFVnd) AS cancelados_total
+            FROM Blue.dbo.vwVndDoc d WITH (NOLOCK)
+            WHERE d.DataEmissao >= {_MES_INI}
+              AND d.DataEmissao <  {_MES_FIM}
+              AND d.TipoMovimento = '1.5-Documentos Cancelados'
+              AND d.CodPlanoVnd NOT IN ('004','012','025','027')
+        """)
+
+        kpi_venda_liquida_f     = _safe_float(df_novos_kpis_f, "venda_liq")
+        kpi_custo_rep_f         = _safe_float(df_novos_kpis_f, "custo_rep_liq")
+        kpi_frete_f             = _safe_float(df_novos_kpis_f, "frete_total")
+        kpi_devolucoes_f        = _safe_float(df_dev_f,         "devolucoes_total")
+        kpi_cancelados_f        = _safe_float(df_canc_f,        "cancelados_total")
+        kpi_faturamento_bruto_f = kpi_venda_liquida_f + kpi_devolucoes_f + kpi_cancelados_f
+        kpi_lucro_bruto_f       = kpi_venda_liquida_f - kpi_custo_rep_f
+
         venda_bruta = _safe_float(df_kpi, "venda_bruta")
         devolucao   = _safe_float(df_kpi, "devolucao")
         venda_liq   = venda_bruta + devolucao
@@ -456,6 +505,13 @@ class BotDashboard(BaseBot):
             "top_vendedores":     df_vend.to_dict("records"),
             "faturamento_diario": df_diario.to_dict("records"),
             "marcas_mes":         df_marcas.to_dict("records"),
+            "kpi_venda_liquida":     kpi_venda_liquida_f,
+            "kpi_devolucoes":        kpi_devolucoes_f,
+            "kpi_cancelados":        kpi_cancelados_f,
+            "kpi_faturamento_bruto": kpi_faturamento_bruto_f,
+            "kpi_custo_rep":         kpi_custo_rep_f,
+            "kpi_lucro_bruto":       kpi_lucro_bruto_f,
+            "kpi_frete":             kpi_frete_f,
             "ultimo_update":      datetime.now().strftime("%H:%M:%S"),
         }
 
