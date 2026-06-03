@@ -288,11 +288,9 @@ class BotDashboard(BaseBot):
 
         df_canc = db.new_conn_query(f"""
             SELECT SUM(d.ValTotalNFVnd) AS cancelados_total
-            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK)
-                ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE v.DtVnd >= {_MES_INI}
-              AND v.DtVnd <  {_MES_FIM}
+            FROM Blue.dbo.vwVndDoc d WITH (NOLOCK)
+            WHERE d.DataEmissao >= {_MES_INI}
+              AND d.DataEmissao <  {_MES_FIM}
               AND d.TipoMovimento = '1.5-Documentos Cancelados'
               AND d.CodPlanoVnd NOT IN ('004','012','025','027')
         """)
