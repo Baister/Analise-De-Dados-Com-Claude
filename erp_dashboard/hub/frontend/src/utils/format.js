@@ -29,3 +29,15 @@ export function shortBrl(value) {
   if (value >= 1_000)     return `R$${(value / 1_000).toFixed(0)}k`;
   return brl(value);
 }
+
+// brlK: sempre mostra em milhares (K), valor inteiro, sem abreviação para M
+// Ex: 2.435.881 → "R$ 2.436K" | 350.578 → "R$ 351K" | 800 → "R$ 800,00"
+export function brlK(value) {
+  if (value == null || Number.isNaN(value)) return '—';
+  const abs = Math.abs(value);
+  if (abs >= 1_000) {
+    const k = Math.round(value / 1_000);
+    return `R$ ${k.toLocaleString('pt-BR')}K`;
+  }
+  return brl(value);
+}
