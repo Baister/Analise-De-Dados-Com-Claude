@@ -190,19 +190,17 @@ class BotDashboard(BaseBot):
         df_marcas = db.query(f"""
             SELECT TOP 8
                 i.DescrMarca,
-                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.PrecoVndTotItem ELSE 0 END) AS faturamento,
-                SUM(CASE WHEN i.CustoRepTotItem <  0 THEN i.PrecoVndTotItem ELSE 0 END) AS devolucao,
-                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.PrecoVndTotItem - i.CustoRepTotItem ELSE 0 END) AS margem_bruta,
-                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.QtdItem ELSE 0 END)         AS quantidade,
-                COUNT(DISTINCT CASE WHEN i.CustoRepTotItem >= 0 THEN i.NrDoc END)       AS qtd_documentos,
-                COUNT(DISTINCT CASE WHEN i.CustoRepTotItem <  0 THEN i.NrDoc END)       AS qtd_devolucoes
+                SUM(i.PrecoVndTotItem)                          AS venda_liq_prod,
+                SUM(i.CustoRepTotItem)                          AS custo_rep_prod,
+                SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem) AS lucro_prod,
+                SUM(i.QtdItem)                                  AS quantidade
             FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
             WHERE i.DtVnd >= {_MES_INI}
               AND i.DtVnd <  {_MES_FIM}
-              AND i.Fat = 1
               AND i.DescrMarca IS NOT NULL
+              AND i.CodPlanoVnd NOT IN ('004','012','025','027')
             GROUP BY i.DescrMarca
-            ORDER BY faturamento DESC
+            ORDER BY venda_liq_prod DESC
         """)
 
         # Map CodVend → Vendedor using df_vend so names match top_vendedores exactly
@@ -216,22 +214,23 @@ class BotDashboard(BaseBot):
                 SELECT TOP 500
                     i.CodVend,
                     i.DescrMarca,
-                    SUM(i.PrecoVndTotItem) AS faturamento,
-                    SUM(i.QtdItem)         AS quantidade
+                    SUM(i.PrecoVndTotItem)                          AS venda_liq_prod,
+                    SUM(i.CustoRepTotItem)                          AS custo_rep_prod,
+                    SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem) AS lucro_prod,
+                    SUM(i.QtdItem)                                  AS quantidade
                 FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
                 WHERE i.DtVnd >= {_MES_INI}
                   AND i.DtVnd <  {_MES_FIM}
-                  AND i.Fat = 1
                   AND i.DescrMarca IS NOT NULL
-                  AND i.CustoRepTotItem >= 0
                   AND i.CodVend IN ({_in_codvend})
+                  AND i.CodPlanoVnd NOT IN ('004','012','025','027')
                 GROUP BY i.CodVend, i.DescrMarca
-                ORDER BY i.CodVend, faturamento DESC
+                ORDER BY i.CodVend, venda_liq_prod DESC
             """)
             if not _raw.empty:
                 _raw['Vendedor'] = _raw['CodVend'].astype(str).map(_cod_vend_map)
                 df_marcas_vend = _raw.dropna(subset=['Vendedor'])[
-                    ['Vendedor', 'DescrMarca', 'faturamento', 'quantidade']
+                    ['Vendedor', 'DescrMarca', 'venda_liq_prod', 'custo_rep_prod', 'lucro_prod', 'quantidade']
                 ].copy()
             else:
                 df_marcas_vend = pd.DataFrame()
@@ -260,18 +259,19 @@ class BotDashboard(BaseBot):
                 SUM(i.PrecoVndTotItem) AS faturamento
             FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
             WHERE i.DtVnd >= DATEADD(day, -30, GETDATE())
-              AND i.Fat = 1
               AND i.DescrMarca IS NOT NULL
-              AND i.CustoRepTotItem >= 0
+              AND i.CodPlanoVnd NOT IN ('004','012','025','027')
             GROUP BY CONVERT(date, i.DtVnd), i.DescrMarca
             ORDER BY dia, faturamento DESC
         """)
 
         df_novos_kpis = db.new_conn_query(f"""
             SELECT
-                SUM(v.ValVndTotal)   AS venda_liq,
-                SUM(v.CustoRepTotal) AS custo_rep_liq,
-                SUM(v.TotalFrete)    AS frete_total
+                SUM(v.ValVndTotal)                                              AS venda_liq,
+                SUM(v.CustoRepTotal)                                            AS custo_rep_liq,
+                SUM(v.TotalFrete)                                               AS frete_total,
+                COUNT(DISTINCT v.NrDoc)                                         AS qtd_vendas_bruta,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal < 0 THEN v.NrDoc END) AS qtd_vendas_dev
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
             WHERE v.DtVnd >= {_MES_INI}
               AND v.DtVnd <  {_MES_FIM}
@@ -298,6 +298,8 @@ class BotDashboard(BaseBot):
         kpi_venda_liquida     = _safe_float(df_novos_kpis, "venda_liq")
         kpi_custo_rep         = _safe_float(df_novos_kpis, "custo_rep_liq")
         kpi_frete             = _safe_float(df_novos_kpis, "frete_total")
+        kpi_qtd_vendas_bruta  = _safe_int(df_novos_kpis, "qtd_vendas_bruta")
+        kpi_qtd_vendas_dev    = _safe_int(df_novos_kpis, "qtd_vendas_dev")
         kpi_devolucoes        = _safe_float(df_dev,         "devolucoes_total")
         kpi_cancelados        = _safe_float(df_canc,        "cancelados_total")
         kpi_faturamento_bruto = kpi_venda_liquida + kpi_devolucoes + kpi_cancelados
@@ -335,6 +337,8 @@ class BotDashboard(BaseBot):
             "kpi_custo_rep":                   kpi_custo_rep,
             "kpi_lucro_bruto":                 kpi_lucro_bruto,
             "kpi_frete":                       kpi_frete,
+            "qtd_vendas_bruta":                kpi_qtd_vendas_bruta,
+            "qtd_vendas_dev":                  kpi_qtd_vendas_dev,
             "ultimo_update":                   datetime.now().strftime("%H:%M:%S"),
         }
 
