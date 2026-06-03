@@ -372,7 +372,8 @@ class BotDashboard(BaseBot):
 
         marca_params: list = []
         marca_parts = [f"i.DtVnd >= {_MES_INI}", f"i.DtVnd < {_MES_FIM}",
-                       "i.Fat = 1", "i.DescrMarca IS NOT NULL", "i.CustoRepTotItem >= 0"]
+                       "i.DescrMarca IS NOT NULL",
+                       "i.CodPlanoVnd NOT IN ('004','012','025','027')"]
         if filtros.get("marca"):
             marca_parts.append("i.DescrMarca LIKE ?")
             marca_params.append(f"%{filtros['marca'][:100]}%")
@@ -385,12 +386,13 @@ class BotDashboard(BaseBot):
 
         df_marcas = db.query(f"""
             SELECT TOP 8 i.DescrMarca,
-                SUM(i.PrecoVndTotItem) AS faturamento,
-                SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem) AS margem_bruta,
-                SUM(i.QtdItem) AS quantidade
+                SUM(i.PrecoVndTotItem)                          AS venda_liq_prod,
+                SUM(i.CustoRepTotItem)                          AS custo_rep_prod,
+                SUM(i.PrecoVndTotItem) - SUM(i.CustoRepTotItem) AS lucro_prod,
+                SUM(i.QtdItem)                                  AS quantidade
             FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
             WHERE {" AND ".join(marca_parts)}
-            GROUP BY i.DescrMarca ORDER BY faturamento DESC
+            GROUP BY i.DescrMarca ORDER BY venda_liq_prod DESC
         """, marca_params if marca_params else None)
 
         df_vend = db.query(f"""
@@ -408,22 +410,22 @@ class BotDashboard(BaseBot):
         # Subquery com ORDER BY DESC garante os 30 dias mais recentes (TOP semântico correto)
         if filtros.get("marca"):
             diario_parts:  list = ["i.DtVnd >= DATEADD(day, -30, GETDATE())",
-                                   "d.Cancelado = ''", "i.Fat = 1",
-                                   "i.CustoRepTotItem >= 0",
-                                   f"vv.CodPlanoVnd NOT IN ('{_pl}')"]
+                                   "i.DescrMarca IS NOT NULL",
+                                   "i.CodPlanoVnd NOT IN ('004','012','025','027')"]
             diario_params: list = []
             diario_parts.append("i.DescrMarca LIKE ?")
             diario_params.append(f"%{filtros['marca'][:100]}%")
             if filtros.get("vendedor"):
-                diario_parts.append("vv.Vendedor LIKE ?")
+                diario_parts.append(
+                    "EXISTS (SELECT 1 FROM Blue.dbo.vmVndDoc vv WITH (NOLOCK)"
+                    " WHERE vv.NrDoc=i.NrDoc AND vv.NSUDoc=i.NSUDoc AND vv.Vendedor LIKE ?)"
+                )
                 diario_params.append(f"%{filtros['vendedor'][:100]}%")
             df_diario = db.query(f"""
                 SELECT dia, faturamento FROM (
                     SELECT TOP 30 CONVERT(date, i.DtVnd) AS dia,
                            SUM(i.PrecoVndTotItem) AS faturamento
                     FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
-                    INNER JOIN Blue.dbo.vwVndDoc d  WITH (NOLOCK) ON i.NrDoc=d.NrDoc  AND i.NSUDoc=d.NSUDoc
-                    INNER JOIN Blue.dbo.vmVndDoc vv WITH (NOLOCK) ON i.NrDoc=vv.NrDoc AND i.NSUDoc=vv.NSUDoc
                     WHERE {" AND ".join(diario_parts)}
                     GROUP BY CONVERT(date, i.DtVnd) ORDER BY dia DESC
                 ) _sub ORDER BY dia
@@ -451,9 +453,11 @@ class BotDashboard(BaseBot):
 
         df_novos_kpis_f = db.new_conn_query(f"""
             SELECT
-                SUM(v.ValVndTotal)   AS venda_liq,
-                SUM(v.CustoRepTotal) AS custo_rep_liq,
-                SUM(v.TotalFrete)    AS frete_total
+                SUM(v.ValVndTotal)                                              AS venda_liq,
+                SUM(v.CustoRepTotal)                                            AS custo_rep_liq,
+                SUM(v.TotalFrete)                                               AS frete_total,
+                COUNT(DISTINCT v.NrDoc)                                         AS qtd_vendas_bruta,
+                COUNT(DISTINCT CASE WHEN v.CustoRepTotal < 0 THEN v.NrDoc END) AS qtd_vendas_dev
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
             WHERE {where_vnd}
               {_EXCLUIR_PLANO}
@@ -484,6 +488,8 @@ class BotDashboard(BaseBot):
         kpi_venda_liquida_f     = _safe_float(df_novos_kpis_f, "venda_liq")
         kpi_custo_rep_f         = _safe_float(df_novos_kpis_f, "custo_rep_liq")
         kpi_frete_f             = _safe_float(df_novos_kpis_f, "frete_total")
+        kpi_qtd_vendas_bruta_f  = _safe_int(df_novos_kpis_f, "qtd_vendas_bruta")
+        kpi_qtd_vendas_dev_f    = _safe_int(df_novos_kpis_f, "qtd_vendas_dev")
         kpi_devolucoes_f        = _safe_float(df_dev_f,         "devolucoes_total")
         kpi_cancelados_f        = _safe_float(df_canc_f,        "cancelados_total")
         kpi_faturamento_bruto_f = kpi_venda_liquida_f + kpi_devolucoes_f + kpi_cancelados_f
@@ -516,6 +522,8 @@ class BotDashboard(BaseBot):
             "kpi_custo_rep":         kpi_custo_rep_f,
             "kpi_lucro_bruto":       kpi_lucro_bruto_f,
             "kpi_frete":             kpi_frete_f,
+            "qtd_vendas_bruta":      kpi_qtd_vendas_bruta_f,
+            "qtd_vendas_dev":        kpi_qtd_vendas_dev_f,
             "ultimo_update":      datetime.now().strftime("%H:%M:%S"),
         }
 
