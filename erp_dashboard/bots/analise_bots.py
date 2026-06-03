@@ -502,6 +502,31 @@ class BotDashboard(BaseBot):
               AND d.CodPlanoVnd NOT IN ('004','012','025','027')
         """)
 
+        # Top itens filtrados por vendedor (usando EXISTS pois vmVndItemDoc tem CodVend, não Vendedor)
+        top_itens_parts = [f"i.DtVnd >= {_MES_INI}", f"i.DtVnd < {_MES_FIM}",
+                           "i.DescrItem IS NOT NULL",
+                           "i.CodPlanoVnd NOT IN ('004','012','025','027')"]
+        top_itens_params: list = []
+        if filtros.get("vendedor"):
+            top_itens_parts.append(
+                "EXISTS (SELECT 1 FROM Blue.dbo.vmVndDoc vv WITH (NOLOCK)"
+                " WHERE vv.NrDoc=i.NrDoc AND vv.NSUDoc=i.NSUDoc AND vv.Vendedor LIKE ?)"
+            )
+            top_itens_params.append(f"%{filtros['vendedor'][:100]}%")
+
+        df_top_itens_f = db.new_conn_query(f"""
+            SELECT TOP 10
+                i.CodItem,
+                MAX(i.DescrItem)       AS DescrItem,
+                MAX(i.DescrMarca)      AS DescrMarca,
+                SUM(i.QtdItem)         AS quantidade,
+                SUM(i.PrecoVndTotItem) AS venda_liq_prod
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            WHERE {" AND ".join(top_itens_parts)}
+            GROUP BY i.CodItem
+            ORDER BY quantidade DESC
+        """, top_itens_params if top_itens_params else None)
+
         kpi_venda_liquida_f     = _safe_float(df_novos_kpis_f, "venda_liq")
         kpi_custo_rep_f         = _safe_float(df_novos_kpis_f, "custo_rep_liq")
         kpi_frete_f             = _safe_float(df_novos_kpis_f, "frete_total")
@@ -532,6 +557,7 @@ class BotDashboard(BaseBot):
             "top_vendedores":     df_vend.to_dict("records"),
             "faturamento_diario": df_diario.to_dict("records"),
             "marcas_mes":         df_marcas.to_dict("records"),
+            "top_itens_mes":      df_top_itens_f.to_dict("records"),
             "kpi_venda_liquida":     kpi_venda_liquida_f,
             "kpi_devolucoes":        kpi_devolucoes_f,
             "kpi_cancelados":        kpi_cancelados_f,
