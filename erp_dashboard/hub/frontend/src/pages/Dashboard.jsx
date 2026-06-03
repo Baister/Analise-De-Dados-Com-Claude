@@ -270,15 +270,7 @@ export default function Dashboard({ refreshTrigger }) {
           />
         </div>
 
-        {/* Col 2: Documentos Cancelados */}
-        <StatCard
-          label="Documentos Cancelados"
-          sub="vwVndDoc — TipoMovimento 1.5"
-          value={data?.kpi_cancelados}
-          color="#ef4444"
-        />
-
-        {/* Col 3: Devoluções → Qtde Devoluções */}
+        {/* Col 2: Devoluções → Qtde Devoluções */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <StatCard
             label="Devoluções"
@@ -295,7 +287,23 @@ export default function Dashboard({ refreshTrigger }) {
           />
         </div>
 
-        {/* Col 4: Faturamento Líquido → Custo Rep → Lucro Bruto */}
+        {/* Col 3: Documentos Cancelados → Lucro Bruto */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <StatCard
+            label="Documentos Cancelados"
+            sub="vwVndDoc — TipoMovimento 1.5"
+            value={data?.kpi_cancelados}
+            color="#ef4444"
+          />
+          <StatCard
+            label="Lucro Bruto"
+            value={data?.kpi_lucro_bruto}
+            color={lucroColor}
+            small
+          />
+        </div>
+
+        {/* Col 4: Faturamento Líquido → Custo Rep */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <StatCard
             label="Faturamento do Mês"
@@ -307,12 +315,6 @@ export default function Dashboard({ refreshTrigger }) {
             label="Custo Rep Líquida"
             value={data?.kpi_custo_rep}
             color="#a855f7"
-            small
-          />
-          <StatCard
-            label="Lucro Bruto"
-            value={data?.kpi_lucro_bruto}
-            color={lucroColor}
             small
           />
         </div>
