@@ -267,6 +267,44 @@ class BotDashboard(BaseBot):
             ORDER BY dia, faturamento DESC
         """)
 
+        df_novos_kpis = db.new_conn_query(f"""
+            SELECT
+                SUM(v.ValVndTotal)   AS venda_liq,
+                SUM(v.CustoRepTotal) AS custo_rep_liq,
+                SUM(v.TotalFrete)    AS frete_total
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            WHERE v.DtVnd >= {_MES_INI}
+              AND v.DtVnd <  {_MES_FIM}
+              {_EXCLUIR_PLANO}
+        """)
+
+        df_dev = db.new_conn_query(f"""
+            SELECT SUM(d.ValTotItem) AS devolucoes_total
+            FROM Blue.dbo.vmMetricasMotivoDevItem d WITH (NOLOCK)
+            WHERE d.DtVnd >= {_MES_INI}
+              AND d.DtVnd <  {_MES_FIM}
+              AND d.CodPlanoVnd NOT IN ('004','012','025','027')
+        """)
+
+        df_canc = db.new_conn_query(f"""
+            SELECT SUM(d.ValTotalNFVnd) AS cancelados_total
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK)
+                ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+            WHERE v.DtVnd >= {_MES_INI}
+              AND v.DtVnd <  {_MES_FIM}
+              AND d.TipoMovimento = '1.5-Documentos Cancelados'
+              AND d.CodPlanoVnd NOT IN ('004','012','025','027')
+        """)
+
+        kpi_venda_liquida     = _safe_float(df_novos_kpis, "venda_liq")
+        kpi_custo_rep         = _safe_float(df_novos_kpis, "custo_rep_liq")
+        kpi_frete             = _safe_float(df_novos_kpis, "frete_total")
+        kpi_devolucoes        = _safe_float(df_dev,         "devolucoes_total")
+        kpi_cancelados        = _safe_float(df_canc,        "cancelados_total")
+        kpi_faturamento_bruto = kpi_venda_liquida + kpi_devolucoes + kpi_cancelados
+        kpi_lucro_bruto       = kpi_venda_liquida - kpi_custo_rep
+
         venda_bruta  = _safe_float(df_kpi, "venda_bruta")
         devolucao    = _safe_float(df_kpi, "devolucao")
         venda_liq    = venda_bruta + devolucao
@@ -292,6 +330,13 @@ class BotDashboard(BaseBot):
             "marcas_por_vendedor":             df_marcas_vend.to_dict("records"),
             "faturamento_diario_por_vendedor": df_diario_vend.to_dict("records"),
             "faturamento_diario_por_marca":    df_diario_marca.to_dict("records"),
+            "kpi_venda_liquida":               kpi_venda_liquida,
+            "kpi_devolucoes":                  kpi_devolucoes,
+            "kpi_cancelados":                  kpi_cancelados,
+            "kpi_faturamento_bruto":           kpi_faturamento_bruto,
+            "kpi_custo_rep":                   kpi_custo_rep,
+            "kpi_lucro_bruto":                 kpi_lucro_bruto,
+            "kpi_frete":                       kpi_frete,
             "ultimo_update":                   datetime.now().strftime("%H:%M:%S"),
         }
 
