@@ -207,9 +207,9 @@ export default function Dashboard({ refreshTrigger }) {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
           label="Faturamento do Mês"
-          value={brl(kpis.faturamento_atual ?? 0)}
+          value={brl(data?.kpi_venda_liquida ?? 0)}
           variant={pctMeta >= 100 ? 'success' : pctMeta >= 70 ? 'warning' : 'error'}
-          sub={metaVal > 0 ? `Meta: ${brl(metaVal)}` : undefined}
+          sub="Venda Líquida (R$)"
         />
         <KpiCard
           label="% da Meta"
@@ -219,9 +219,9 @@ export default function Dashboard({ refreshTrigger }) {
         <KpiCard label="Ticket Médio" value={brl(kpis.ticket_medio ?? 0)} variant="default" />
         <KpiCard label="Nº Vendas" value={String(kpis.qtd_documentos ?? 0)} variant="default" />
         <KpiCard
-          label="Devolução R$"
-          value={brl(Math.abs(kpis.devolucao ?? 0))}
-          variant={(kpis.devolucao ?? 0) < -5000 ? 'error' : 'default'}
+          label="Devoluções R$"
+          value={brl(data?.kpi_devolucoes ?? 0)}
+          variant={(data?.kpi_devolucoes ?? 0) > 5000 ? 'error' : 'default'}
         />
         <KpiCard label="Nº Devoluções" value={String(kpis.qtd_devolucoes ?? 0)} variant="default" />
         <KpiCard
@@ -236,6 +236,36 @@ export default function Dashboard({ refreshTrigger }) {
           variant={pctMetaDiaria >= 100 ? 'success' : pctMetaDiaria >= 70 ? 'warning' : 'error'}
           sub={metaDiaria > 0 ? `${brl(fatHoje)} de ${brl(metaDiaria)}` : 'Meta não configurada'}
           subAbove
+        />
+      </div>
+
+      {/* ── Novos KPIs financeiros ─────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <KpiCard
+          label="Documentos Cancelados"
+          value={brl(data?.kpi_cancelados ?? 0)}
+          variant={(data?.kpi_cancelados ?? 0) > 10000 ? 'error' : 'default'}
+        />
+        <KpiCard
+          label="Faturamento Mês"
+          value={brl(data?.kpi_faturamento_bruto ?? 0)}
+          sub="Valor Bruto das Vendas (R$)"
+          variant="default"
+        />
+        <KpiCard
+          label="Custo Rep Líquida"
+          value={brl(data?.kpi_custo_rep ?? 0)}
+          variant="default"
+        />
+        <KpiCard
+          label="Lucro Bruto"
+          value={brl(data?.kpi_lucro_bruto ?? 0)}
+          variant={(data?.kpi_lucro_bruto ?? 0) > 0 ? 'success' : 'error'}
+        />
+        <KpiCard
+          label="Frete"
+          value={brl(data?.kpi_frete ?? 0)}
+          variant="default"
         />
       </div>
 
