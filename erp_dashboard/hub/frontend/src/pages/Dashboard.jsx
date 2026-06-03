@@ -33,6 +33,7 @@ export default function Dashboard({ refreshTrigger }) {
 
   const topVendedores = useMemo(() => data?.top_vendedores ?? [], [data]);
   const marcasMes     = useMemo(() => data?.marcas_mes ?? [],     [data]);
+  const topItens      = useMemo(() => (data?.top_itens_mes ?? []).slice(0, 8), [data]);
 
   const fatDiario = useMemo(() => {
     if (!data) return [];
@@ -325,23 +326,20 @@ export default function Dashboard({ refreshTrigger }) {
           />
         </div>
         <div className="bg-card border border-card_border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-text_main mb-3">Itens Vendidos por Marca</h2>
-          <PieChart
-            data={marcasFiltradas}
-            nameKey="DescrMarca"
-            valueKey="quantidade"
-            showValue
+          <h2 className="text-sm font-semibold text-text_main mb-3">Top Itens Mais Vendidos (un.)</h2>
+          <BarChart
+            data={topItens}
+            xKey="DescrItem"
+            bars={[{ key: 'quantidade', label: 'Qtd Vendida' }]}
+            tooltipExtra={[
+              { key: 'DescrMarca',    label: 'Marca' },
+              { key: 'venda_liq_prod', label: 'Venda Líquida', formatter: brl },
+            ]}
+            horizontal
+            showLabels
+            yAxisWidth={170}
             height={220}
-            highlightKey={filtroMarca}
-            tooltipContext={{
-              title: 'Quantidade de Itens',
-              formula: 'SUM(vmVndItemDoc.QtdItem) — exclui planos 004, 012, 025, 027',
-              extra: [
-                { key: 'venda_liq_prod', label: 'Venda Líquida', formatter: brl },
-                { key: 'custo_rep_prod', label: 'Custo Rep',     formatter: brl },
-                { key: 'lucro_prod',     label: 'Lucro Bruto',   formatter: brl },
-              ],
-            }}
+            colors={['#238636']}
           />
         </div>
       </div>

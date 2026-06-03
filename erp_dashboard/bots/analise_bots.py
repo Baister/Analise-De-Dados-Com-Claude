@@ -295,6 +295,22 @@ class BotDashboard(BaseBot):
               AND d.CodPlanoVnd NOT IN ('004','012','025','027')
         """)
 
+        df_top_itens = db.new_conn_query(f"""
+            SELECT TOP 10
+                i.CodItem,
+                MAX(i.DescrItem)       AS DescrItem,
+                MAX(i.DescrMarca)      AS DescrMarca,
+                SUM(i.QtdItem)         AS quantidade,
+                SUM(i.PrecoVndTotItem) AS venda_liq_prod
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            WHERE i.DtVnd >= {_MES_INI}
+              AND i.DtVnd <  {_MES_FIM}
+              AND i.DescrItem IS NOT NULL
+              AND i.CodPlanoVnd NOT IN ('004','012','025','027')
+            GROUP BY i.CodItem
+            ORDER BY quantidade DESC
+        """)
+
         kpi_venda_liquida     = _safe_float(df_novos_kpis, "venda_liq")
         kpi_custo_rep         = _safe_float(df_novos_kpis, "custo_rep_liq")
         kpi_frete             = _safe_float(df_novos_kpis, "frete_total")
@@ -330,6 +346,7 @@ class BotDashboard(BaseBot):
             "marcas_por_vendedor":             df_marcas_vend.to_dict("records"),
             "faturamento_diario_por_vendedor": df_diario_vend.to_dict("records"),
             "faturamento_diario_por_marca":    df_diario_marca.to_dict("records"),
+            "top_itens_mes":                   df_top_itens.to_dict("records"),
             "kpi_venda_liquida":               kpi_venda_liquida,
             "kpi_devolucoes":                  kpi_devolucoes,
             "kpi_cancelados":                  kpi_cancelados,
