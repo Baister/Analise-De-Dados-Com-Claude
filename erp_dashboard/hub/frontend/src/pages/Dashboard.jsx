@@ -55,6 +55,8 @@ export default function Dashboard({ refreshTrigger }) {
         return {
           faturamento_atual: vb,
           qtd_documentos:    vend.qtd_pedidos    ?? 0,
+          qtd_vendas_bruta:  vend.qtd_pedidos    ?? 0,
+          qtd_vendas_dev:    vend.qtd_devolucoes ?? 0,
           ticket_medio:      vend.ticket_medio   ?? 0,
           devolucao:         vend.devolucao      ?? 0,
           qtd_devolucoes:    vend.qtd_devolucoes ?? 0,
@@ -66,17 +68,18 @@ export default function Dashboard({ refreshTrigger }) {
     if (filtroMarca) {
       const marca = marcasMes.find(m => m.DescrMarca === filtroMarca);
       if (marca) {
-        const mb  = marca.margem_bruta   ?? 0;
-        const vb  = marca.faturamento    ?? 0;
-        const qtd = marca.qtd_documentos ?? 0;
+        const vlp = marca.venda_liq_prod ?? 0;
+        const lp  = marca.lucro_prod     ?? 0;
         return {
-          faturamento_atual: vb,
-          qtd_documentos:    qtd,
-          ticket_medio:      qtd > 0 ? vb / qtd : 0,
-          devolucao:         marca.devolucao      ?? 0,
-          qtd_devolucoes:    marca.qtd_devolucoes ?? 0,
-          margem_bruta:      mb,
-          pct_margem:        vb > 0 ? (mb / vb) * 100 : 0,
+          faturamento_atual: vlp,
+          qtd_documentos:    marca.quantidade  ?? 0,
+          qtd_vendas_bruta:  0,
+          qtd_vendas_dev:    0,
+          ticket_medio:      0,
+          devolucao:         0,
+          qtd_devolucoes:    0,
+          margem_bruta:      lp,
+          pct_margem:        vlp > 0 ? (lp / vlp) * 100 : 0,
         };
       }
     }
@@ -85,6 +88,8 @@ export default function Dashboard({ refreshTrigger }) {
     return {
       faturamento_atual: data.faturamento_atual ?? 0,
       qtd_documentos:    data.qtd_documentos ?? 0,
+      qtd_vendas_bruta:  data.qtd_vendas_bruta ?? 0,
+      qtd_vendas_dev:    data.qtd_vendas_dev   ?? 0,
       ticket_medio:      data.ticket_medio ?? 0,
       devolucao:         data.devolucao ?? 0,
       qtd_devolucoes:    data.qtd_devolucoes ?? 0,
@@ -99,7 +104,7 @@ export default function Dashboard({ refreshTrigger }) {
     if (filtroMarca && data?.marcas_por_vendedor?.length) {
       return data.marcas_por_vendedor
         .filter(m => m.DescrMarca === filtroMarca)
-        .sort((a, b) => b.faturamento - a.faturamento)
+        .sort((a, b) => (b.venda_liq_prod ?? 0) - (a.venda_liq_prod ?? 0))
         .slice(0, 10);
     }
     return topVendedores.slice(0, 10);
@@ -217,13 +222,13 @@ export default function Dashboard({ refreshTrigger }) {
           variant={pctMeta >= 100 ? 'success' : pctMeta >= 70 ? 'warning' : 'error'}
         />
         <KpiCard label="Ticket Médio" value={brl(kpis.ticket_medio ?? 0)} variant="default" />
-        <KpiCard label="Nº Vendas" value={String(kpis.qtd_documentos ?? 0)} variant="default" />
+        <KpiCard label="Qtde Vendas" value={String(kpis.qtd_vendas_bruta ?? 0)} variant="default" />
         <KpiCard
           label="Devoluções R$"
           value={brl(data?.kpi_devolucoes ?? 0)}
           variant={(data?.kpi_devolucoes ?? 0) > 5000 ? 'error' : 'default'}
         />
-        <KpiCard label="Nº Devoluções" value={String(kpis.qtd_devolucoes ?? 0)} variant="default" />
+        <KpiCard label="Qtde Devoluções" value={String(kpis.qtd_vendas_dev ?? 0)} variant="default" />
         <KpiCard
           label="Margem Bruta"
           value={pct(kpis.pct_margem ?? 0)}
@@ -287,7 +292,7 @@ export default function Dashboard({ refreshTrigger }) {
           <BarChart
             data={topVendedoresFiltrados}
             xKey="Vendedor"
-            bars={[{ key: (filtroMarca && data?.marcas_por_vendedor?.length) ? 'faturamento' : 'total_venda', label: 'Total', formatter: shortBrl }]}
+            bars={[{ key: (filtroMarca && data?.marcas_por_vendedor?.length) ? 'venda_liq_prod' : 'total_venda', label: 'Total', formatter: shortBrl }]}
             horizontal
             showLabels
             highlightKey={filtroVendedor}
@@ -303,7 +308,7 @@ export default function Dashboard({ refreshTrigger }) {
           <PieChart
             data={marcasFiltradas}
             nameKey="DescrMarca"
-            valueKey="faturamento"
+            valueKey="venda_liq_prod"
             showValue
             formatter={shortBrl}
             height={220}
