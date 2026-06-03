@@ -12,8 +12,11 @@ const TOOLTIP = {
 
 // showValue=true → legenda mostra "Nome · R$XXk"
 // formatter: função de formatação do valor (padrão: brl)
+// tooltipContext: { title, formula, extra: [{key, label, formatter}] }
+//   → ativa tooltip customizado com contexto de como o valor foi calculado
 export default function PieChart({
   data, nameKey, valueKey, showValue = false, formatter, height = 200, highlightKey = null,
+  tooltipContext = null,
 }) {
   if (!data?.length) {
     return (
@@ -23,6 +26,44 @@ export default function PieChart({
     );
   }
   const fmt = formatter || brl;
+
+  const total = data.reduce((s, d) => s + (d[valueKey] ?? 0), 0);
+
+  const customTooltip = tooltipContext ? ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const item = payload[0].payload;
+    const val  = item[valueKey] ?? 0;
+    const pct  = total > 0 ? (val / total * 100).toFixed(1) : '0.0';
+    return (
+      <div style={{
+        background: '#1c2128', border: '1px solid #30363d', borderRadius: 6,
+        fontSize: 12, padding: '10px 14px', color: '#e6edf3', maxWidth: 280,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+      }}>
+        <div style={{ fontWeight: 700, marginBottom: 8, fontSize: 13, borderBottom: '1px solid #30363d', paddingBottom: 6 }}>
+          {item[nameKey]}
+        </div>
+        <div style={{ marginBottom: 4 }}>
+          <span style={{ color: '#8b949e' }}>{tooltipContext.title}: </span>
+          <span style={{ fontWeight: 600 }}>{fmt(val)}</span>
+          <span style={{ color: '#6e7681', marginLeft: 8, fontSize: 11 }}>{pct}% do total</span>
+        </div>
+        {tooltipContext.extra?.map(ex => (
+          <div key={ex.key} style={{ color: '#8b949e', marginBottom: 2 }}>
+            {ex.label}:{' '}
+            <span style={{ color: '#e6edf3' }}>
+              {ex.formatter ? ex.formatter(item[ex.key] ?? 0) : (item[ex.key] ?? '—')}
+            </span>
+          </div>
+        ))}
+        {tooltipContext.formula && (
+          <div style={{ color: '#6e7681', marginTop: 8, fontSize: 10, borderTop: '1px solid #21262d', paddingTop: 6 }}>
+            {tooltipContext.formula}
+          </div>
+        )}
+      </div>
+    );
+  } : null;
 
   return (
     <div style={{ height }} className="flex items-center gap-4">
@@ -46,7 +87,10 @@ export default function PieChart({
                 />
               ))}
             </Pie>
-            <Tooltip {...TOOLTIP} formatter={v => [fmt(v)]} />
+            {customTooltip
+              ? <Tooltip content={customTooltip} />
+              : <Tooltip {...TOOLTIP} formatter={v => [fmt(v)]} />
+            }
           </RC>
         </ResponsiveContainer>
       </div>

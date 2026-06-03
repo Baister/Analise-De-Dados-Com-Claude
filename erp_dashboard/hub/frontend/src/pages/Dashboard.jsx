@@ -313,6 +313,15 @@ export default function Dashboard({ refreshTrigger }) {
             formatter={shortBrl}
             height={220}
             highlightKey={filtroMarca}
+            tooltipContext={{
+              title: 'Venda Líquida Produto',
+              formula: 'SUM(vmVndItemDoc.PrecoVndTotItem) — exclui planos 004, 012, 025, 027',
+              extra: [
+                { key: 'custo_rep_prod', label: 'Custo Rep',   formatter: brl },
+                { key: 'lucro_prod',     label: 'Lucro Bruto', formatter: brl },
+                { key: 'quantidade',     label: 'Qtd Itens',   formatter: v => (v ?? 0).toLocaleString('pt-BR') },
+              ],
+            }}
           />
         </div>
         <div className="bg-card border border-card_border rounded-lg p-4">
@@ -324,6 +333,15 @@ export default function Dashboard({ refreshTrigger }) {
             showValue
             height={220}
             highlightKey={filtroMarca}
+            tooltipContext={{
+              title: 'Quantidade de Itens',
+              formula: 'SUM(vmVndItemDoc.QtdItem) — exclui planos 004, 012, 025, 027',
+              extra: [
+                { key: 'venda_liq_prod', label: 'Venda Líquida', formatter: brl },
+                { key: 'custo_rep_prod', label: 'Custo Rep',     formatter: brl },
+                { key: 'lucro_prod',     label: 'Lucro Bruto',   formatter: brl },
+              ],
+            }}
           />
         </div>
       </div>
