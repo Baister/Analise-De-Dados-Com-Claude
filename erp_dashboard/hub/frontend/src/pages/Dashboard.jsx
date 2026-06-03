@@ -20,6 +20,46 @@ function ProcessingScreen({ label }) {
   );
 }
 
+function SectionLabel({ children, first }) {
+  return (
+    <p
+      style={{
+        fontSize: 10, color: '#475569', textTransform: 'uppercase',
+        letterSpacing: '1px', marginTop: first ? 0 : 18, marginBottom: 8,
+      }}
+    >
+      {children}
+    </p>
+  );
+}
+
+// Card compacto para o waterfall financeiro
+function StatCard({ label, sub, value, count = false, color, small = false }) {
+  return (
+    <div
+      className="rounded-lg"
+      style={{
+        background: '#1e293b',
+        borderLeft: `3px solid ${color}`,
+        padding: small ? '10px 14px' : '14px 16px',
+      }}
+    >
+      <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 2 }}>
+        {label}
+      </div>
+      {sub && (
+        <div style={{ fontSize: 9, color: '#334155', marginBottom: 5 }}>{sub}</div>
+      )}
+      <div style={{ fontSize: small ? 18 : 22, fontWeight: 700, color, lineHeight: 1.1 }}>
+        {count
+          ? (value ?? 0).toLocaleString('pt-BR')
+          : shortBrl(value ?? 0)
+        }
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard({ refreshTrigger }) {
   const [meta, setMeta]                     = useState(null);
   const [filtroVendedor, setFiltroVendedor] = useState(null);
@@ -187,54 +227,114 @@ export default function Dashboard({ refreshTrigger }) {
   if (isEmpty) return <ProcessingScreen label="Bot Dashboard" />;
 
   const filtroLabel = filtroVendedor
-    ? `Vendedor: ${filtroVendedor}`
+    ? `Vendedor: ${filtroVendedor.trim()}`
     : filtroMarca ? `Marca: ${filtroMarca}` : null;
 
   const fatChartTitle = filtroVendedor
-    ? `Faturamento Diário — ${filtroVendedor}`
+    ? `Faturamento Diário — ${filtroVendedor.trim()}`
     : filtroMarca ? `Faturamento Diário — ${filtroMarca}` : 'Faturamento Diário';
 
+  const lucroColor = (data?.kpi_lucro_bruto ?? 0) > 0 ? '#10b981' : '#ef4444';
+
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-text_main">Dashboard</h1>
-        <div className="flex items-center gap-3">
+    <div style={{ padding: 16 }}>
+
+      {/* ── Header ──────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+        <h1 style={{ fontSize: 18, fontWeight: 700, color: '#e2e8f0', margin: 0 }}>Dashboard</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {filtroLabel && (
-            <span className="text-xs bg-blue-900/40 text-blue-300 border border-blue-700/40 px-2 py-0.5 rounded">
+            <span style={{
+              fontSize: 11, padding: '2px 10px', borderRadius: 4,
+              background: 'rgba(59,130,246,0.12)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.25)',
+            }}>
               {filtroLabel}
             </span>
           )}
           {data?.ultimo_update && (
-            <span className="text-subtext text-xs">Atualizado: {data.ultimo_update}</span>
+            <span style={{ fontSize: 10, color: '#334155' }}>Atualizado: {data.ultimo_update}</span>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard
-          label="Faturamento do Mês"
-          value={brl(data?.kpi_venda_liquida ?? 0)}
-          variant={pctMeta >= 100 ? 'success' : pctMeta >= 70 ? 'warning' : 'error'}
-          sub="Venda Líquida (R$)"
+      {/* ── Resultado Comercial do Mês ──────────────────────────────── */}
+      <SectionLabel first>Resultado Comercial do Mês</SectionLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+
+        {/* Col 1: Faturamento Bruto → Qtde Vendas */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <StatCard
+            label="Faturamento do Mês"
+            sub="Valor Bruto das Vendas (R$)"
+            value={data?.kpi_faturamento_bruto}
+            color="#3b82f6"
+          />
+          <StatCard
+            label="Qtde Vendas"
+            value={kpis.qtd_vendas_bruta}
+            color="#475569"
+            count
+            small
+          />
+        </div>
+
+        {/* Col 2: Documentos Cancelados */}
+        <StatCard
+          label="Documentos Cancelados"
+          sub="vwVndDoc — TipoMovimento 1.5"
+          value={data?.kpi_cancelados}
+          color="#ef4444"
         />
+
+        {/* Col 3: Devoluções → Qtde Devoluções */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <StatCard
+            label="Devoluções"
+            sub="vmMetricasMotivoDevItem"
+            value={data?.kpi_devolucoes}
+            color="#f59e0b"
+          />
+          <StatCard
+            label="Qtde Devoluções"
+            value={kpis.qtd_vendas_dev}
+            color="#78716c"
+            count
+            small
+          />
+        </div>
+
+        {/* Col 4: Faturamento Líquido → Custo Rep → Lucro Bruto */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <StatCard
+            label="Faturamento do Mês"
+            sub="Venda Líquida (R$)"
+            value={data?.kpi_venda_liquida}
+            color="#22c55e"
+          />
+          <StatCard
+            label="Custo Rep Líquida"
+            value={data?.kpi_custo_rep}
+            color="#a855f7"
+            small
+          />
+          <StatCard
+            label="Lucro Bruto"
+            value={data?.kpi_lucro_bruto}
+            color={lucroColor}
+            small
+          />
+        </div>
+
+      </div>
+
+      {/* ── Performance ─────────────────────────────────────────────── */}
+      <SectionLabel>Performance</SectionLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
         <KpiCard
           label="% da Meta"
           value={pct(pctMeta)}
           variant={pctMeta >= 100 ? 'success' : pctMeta >= 70 ? 'warning' : 'error'}
-        />
-        <KpiCard label="Ticket Médio" value={brl(kpis.ticket_medio ?? 0)} variant="default" />
-        <KpiCard label="Qtde Vendas" value={String(kpis.qtd_vendas_bruta ?? 0)} variant="default" />
-        <KpiCard
-          label="Devoluções R$"
-          value={brl(data?.kpi_devolucoes ?? 0)}
-          variant={(data?.kpi_devolucoes ?? 0) > 5000 ? 'error' : 'default'}
-        />
-        <KpiCard label="Qtde Devoluções" value={String(kpis.qtd_vendas_dev ?? 0)} variant="default" />
-        <KpiCard
-          label="Margem Bruta"
-          value={pct(kpis.pct_margem ?? 0)}
-          variant={(kpis.pct_margem ?? 0) >= 30 ? 'success' : (kpis.pct_margem ?? 0) >= 15 ? 'warning' : 'error'}
-          sub={brl(kpis.margem_bruta ?? 0)}
+          topBorder="#3b82f6"
         />
         <KpiCard
           label="Meta do Dia"
@@ -242,44 +342,35 @@ export default function Dashboard({ refreshTrigger }) {
           variant={pctMetaDiaria >= 100 ? 'success' : pctMetaDiaria >= 70 ? 'warning' : 'error'}
           sub={metaDiaria > 0 ? `${brl(fatHoje)} de ${brl(metaDiaria)}` : 'Meta não configurada'}
           subAbove
-        />
-      </div>
-
-      {/* ── Novos KPIs financeiros ─────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard
-          label="Documentos Cancelados"
-          value={brl(data?.kpi_cancelados ?? 0)}
-          variant={(data?.kpi_cancelados ?? 0) > 10000 ? 'error' : 'default'}
+          topBorder="#f59e0b"
         />
         <KpiCard
-          label="Faturamento Mês"
-          value={brl(data?.kpi_faturamento_bruto ?? 0)}
-          sub="Valor Bruto das Vendas (R$)"
+          label="Ticket Médio"
+          value={brl(kpis.ticket_medio ?? 0)}
           variant="default"
-        />
-        <KpiCard
-          label="Custo Rep Líquida"
-          value={brl(data?.kpi_custo_rep ?? 0)}
-          variant="default"
-        />
-        <KpiCard
-          label="Lucro Bruto"
-          value={brl(data?.kpi_lucro_bruto ?? 0)}
-          variant={(data?.kpi_lucro_bruto ?? 0) > 0 ? 'success' : 'error'}
+          topBorder="#64748b"
         />
         <KpiCard
           label="Frete"
           value={brl(data?.kpi_frete ?? 0)}
           variant="default"
+          topBorder="#64748b"
         />
       </div>
 
-      <FilterBar filters={filterDefs} values={filterValues} onChange={handleFilterChange} />
+      {/* ── Filtros ─────────────────────────────────────────────────── */}
+      <div style={{ marginTop: 14 }}>
+        <FilterBar filters={filterDefs} values={filterValues} onChange={handleFilterChange} />
+      </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-card border border-card_border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-text_main mb-3">{fatChartTitle}</h2>
+      {/* ── Análise Diária ──────────────────────────────────────────── */}
+      <SectionLabel>Análise Diária</SectionLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+
+        <div style={{ background: '#1e293b', borderRadius: 8, padding: 16 }}>
+          <p style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 12 }}>
+            {fatChartTitle}
+          </p>
           <LineChart
             data={fatDiario}
             xKey="dia"
@@ -288,8 +379,10 @@ export default function Dashboard({ refreshTrigger }) {
           />
         </div>
 
-        <div className="bg-card border border-card_border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-text_main mb-3">Top Vendedores</h2>
+        <div style={{ background: '#1e293b', borderRadius: 8, padding: 16 }}>
+          <p style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 12 }}>
+            Top Vendedores
+          </p>
           <BarChart
             data={topVendedoresFiltrados}
             xKey="Vendedor"
@@ -301,11 +394,17 @@ export default function Dashboard({ refreshTrigger }) {
             height={200}
           />
         </div>
+
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-card border border-card_border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-text_main mb-3">Faturamento por Marca</h2>
+      {/* ── Marcas &amp; Produtos ────────────────────────────────────── */}
+      <SectionLabel>Marcas &amp; Produtos</SectionLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+
+        <div style={{ background: '#1e293b', borderRadius: 8, padding: 16 }}>
+          <p style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 12 }}>
+            Faturamento por Marca
+          </p>
           <PieChart
             data={marcasFiltradas}
             nameKey="DescrMarca"
@@ -325,14 +424,17 @@ export default function Dashboard({ refreshTrigger }) {
             }}
           />
         </div>
-        <div className="bg-card border border-card_border rounded-lg p-4">
-          <h2 className="text-sm font-semibold text-text_main mb-3">Top Itens Mais Vendidos (un.)</h2>
+
+        <div style={{ background: '#1e293b', borderRadius: 8, padding: 16 }}>
+          <p style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 12 }}>
+            Top Itens Mais Vendidos (un.)
+          </p>
           <BarChart
             data={topItens}
             xKey="DescrItem"
             bars={[{ key: 'quantidade', label: 'Qtd Vendida' }]}
             tooltipExtra={[
-              { key: 'DescrMarca',    label: 'Marca' },
+              { key: 'DescrMarca',     label: 'Marca' },
               { key: 'venda_liq_prod', label: 'Venda Líquida', formatter: brl },
             ]}
             horizontal
@@ -342,7 +444,15 @@ export default function Dashboard({ refreshTrigger }) {
             colors={['#238636']}
           />
         </div>
+
       </div>
+
+      {data?.ultimo_update && (
+        <p style={{ fontSize: 10, color: '#334155', textAlign: 'center', marginTop: 14 }}>
+          Atualizado: {data.ultimo_update}
+        </p>
+      )}
+
     </div>
   );
 }
