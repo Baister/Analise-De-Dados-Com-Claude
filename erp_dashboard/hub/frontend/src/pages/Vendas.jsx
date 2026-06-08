@@ -138,13 +138,19 @@ export default function Vendas({ refreshTrigger }) {
     return topVendedores.slice(0, 10);
   }, [data, filtroMarca, hasMarcasVend, topVendedores]);
 
+  // Dados do bar "Top Vendedores": 👑 no Top 1 (índice 0, exceto ao filtrar 1 vendedor)
+  // + _fat_liq (faturamento líquido = bruto + devolução) para o tooltip.
+  const topVendData = useMemo(() => topVendedoresFiltrados.map((v, i) => ({
+    ...v,
+    _disp: (!filtroVendedor && i === 0 ? '👑 ' : '') + (v.Vendedor ?? ''),
+    _fat_liq: (v.total_venda ?? 0) + (v.devolucao ?? 0),
+  })), [topVendedoresFiltrados, filtroVendedor]);
+
   const ticketFiltrado = useMemo(() => {
     if (filtroVendedor) return topVendedores.filter(v => v.Vendedor === filtroVendedor);
     if (filtroMarca)    return [];
     return (data?.ticket_medio_vendedor ?? []).slice(0, 10);
   }, [data, filtroVendedor, filtroMarca, topVendedores]);
-
-  const porGrupo = useMemo(() => (data?.por_grupo ?? []).slice(0, 8), [data]);
 
   const itensMarca = useMemo(() => {
     if (!filtroMarca || !data?.top_itens_por_marca) return [];
@@ -220,8 +226,9 @@ export default function Vendas({ refreshTrigger }) {
   const marcaFatTitle  = filtroVendedor ? `Marcas — ${filtroVendedor}` : 'Faturamento por Marca';
   const marcaQtdTitle  = filtroVendedor ? `Itens Vendidos — ${filtroVendedor}` : 'Itens Vendidos por Marca';
 
-  const margemVariant = (kpis.pct_margem ?? 0) >= 30 ? 'success'
-    : (kpis.pct_margem ?? 0) >= 15 ? 'warning' : 'error';
+  // Margem Bruta — faixas de cor (igual Dashboard): >=30 verde | 25–29,99 amarelo | <25 vermelho
+  const margemCor = (kpis.pct_margem ?? 0) >= 30 ? '#22c55e'
+    : (kpis.pct_margem ?? 0) >= 25 ? '#f59e0b' : '#ef4444';
   const devVariant    = Math.abs(kpis.devolucao ?? 0) > 5000 ? 'error' : 'default';
 
   return (
@@ -243,21 +250,23 @@ export default function Vendas({ refreshTrigger }) {
         )}
       </div>
 
-      {/* ── KPIs — linha 1: financeiro ────────────────────────────── */}
+      {/* ── KPIs — linha 1: faturamento bruto + devolução + margem ──── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Faturamento do Mês"  value={brl(kpis.faturamento_atual ?? 0)} variant="default" />
-        <KpiCard label="Ticket Médio"        value={brl(kpis.ticket_medio ?? 0)}      variant="default" />
+        <KpiCard label="Faturamento do Mês Bruto" value={brl(kpis.faturamento_atual ?? 0)} variant="default" />
+        <KpiCard
+          label="Devolução R$"
+          value={brl(Math.abs(kpis.devolucao ?? 0))}
+          variant={devVariant}
+        />
         <KpiCard
           label="Margem Bruta"
           value={pct(kpis.pct_margem ?? 0)}
-          variant={margemVariant}
+          valueColor={margemCor}
+          gradient={`${margemCor}33`}
+          topBorder={margemCor}
           sub={brl(kpis.margem_bruta ?? 0)}
         />
-        <KpiCard
-          label="Clientes Ativos"
-          value={kpis.clientes_ativos !== null ? String(kpis.clientes_ativos) : '—'}
-          variant="default"
-        />
+        <KpiCard label="Ticket Médio" value={brl(kpis.ticket_medio ?? 0)} variant="default" />
       </div>
 
       {/* ── KPIs — linha 2: operacional ───────────────────────────── */}
@@ -265,9 +274,9 @@ export default function Vendas({ refreshTrigger }) {
         <KpiCard label="Nº Documentos"  value={String(kpis.qtd_documentos ?? 0)} variant="default" />
         <KpiCard label="Nº Devoluções"  value={String(kpis.qtd_devolucoes ?? 0)} variant="default" />
         <KpiCard
-          label="Devolução R$"
-          value={brl(Math.abs(kpis.devolucao ?? 0))}
-          variant={devVariant}
+          label="Clientes Ativos"
+          value={kpis.clientes_ativos !== null ? String(kpis.clientes_ativos) : '—'}
+          variant="default"
         />
         <KpiCard label="Total Marcas"   value={String(marcasMes.length)}          variant="default" />
       </div>
@@ -275,80 +284,28 @@ export default function Vendas({ refreshTrigger }) {
       {/* ── Filtros ────────────────────────────────────────────────── */}
       <FilterBar filters={filterDefs} values={filterValues} onChange={handleFilterChange} />
 
-      {/* ── Gráficos — linha 1 ────────────────────────────────────── */}
+      {/* ── Gráficos — Barras (vendedores) ────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-card border border-card_border rounded-xl p-4">
           <SectionHeader
             title={barTitle}
-            subtitle={filtroMarca ? 'faturamento nesta marca' : 'por faturamento bruto'}
+            subtitle={filtroMarca ? 'faturamento nesta marca' : 'por faturamento bruto · 👑 = Top 1'}
           />
           <BarChart
-            data={topVendedoresFiltrados}
-            xKey="Vendedor"
+            data={topVendData}
+            xKey="_disp"
             bars={[{ key: barKey, label: 'Total', formatter: shortBrl }]}
+            tooltipExtra={[
+              { key: 'qtd_pedidos',    label: 'Qtd Vendas' },
+              { key: 'qtd_devolucoes', label: 'Qtd Devoluções' },
+              { key: '_fat_liq',       label: 'Fat. Líquido', formatter: brl },
+            ]}
             horizontal
             showLabels
             highlightKey={filtroVendedor}
-            yAxisWidth={vendYAxisWidth}
+            yAxisWidth={vendYAxisWidth + 16}
             height={240}
           />
-        </div>
-
-        <div className="bg-card border border-card_border rounded-xl p-4">
-          <SectionHeader
-            title={marcaFatTitle}
-            subtitle={filtroVendedor ? 'marcas vendidas por este vendedor' : 'top 8 do mês'}
-          />
-          <PieChart
-            data={marcasFiltradas}
-            nameKey="DescrMarca"
-            valueKey="faturamento"
-            showValue
-            formatter={shortBrl}
-            height={240}
-            highlightKey={filtroMarca}
-          />
-        </div>
-      </div>
-
-      {/* ── Gráficos — linha 2 ────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-card border border-card_border rounded-xl p-4">
-          {filtroVendedor && itensVendedor.length > 0 ? (
-            <>
-              <SectionHeader
-                title={`Top Itens — ${filtroVendedor}`}
-                subtitle="por faturamento no mês"
-              />
-              <PieChart
-                data={itensVendedor}
-                nameKey="DescrItem"
-                valueKey="faturamento"
-                showValue
-                formatter={shortBrl}
-                height={240}
-              />
-            </>
-          ) : !filtroVendedor ? (
-            <>
-              <SectionHeader
-                title={marcaQtdTitle}
-                subtitle="unidades vendidas"
-              />
-              <PieChart
-                data={marcasFiltradas}
-                nameKey="DescrMarca"
-                valueKey="quantidade"
-                showValue
-                height={240}
-                highlightKey={filtroMarca}
-              />
-            </>
-          ) : (
-            <div className="flex items-center justify-center h-full text-subtext text-xs">
-              Sem dados para este vendedor
-            </div>
-          )}
         </div>
 
         <div className="bg-card border border-card_border rounded-xl p-4">
@@ -369,37 +326,50 @@ export default function Vendas({ refreshTrigger }) {
                 height={240}
               />
             </>
-          ) : itensMarca.length > 0 ? (
-            <>
-              <SectionHeader
-                title={`Top Itens — ${filtroMarca}`}
-                subtitle="por faturamento no mês"
-              />
-              <PieChart
-                data={itensMarca}
-                nameKey="DescrItem"
-                valueKey="faturamento"
-                showValue
-                formatter={shortBrl}
-                height={240}
-              />
-            </>
-          ) : !filtroMarca && porGrupo.length > 0 ? (
-            <>
-              <SectionHeader title="Faturamento por Grupo" subtitle="top 8 grupos de produto" />
-              <PieChart
-                data={porGrupo}
-                nameKey="DescrGrpItem"
-                valueKey="faturamento"
-                showValue
-                formatter={shortBrl}
-                height={240}
-              />
-            </>
           ) : (
             <div className="flex items-center justify-center h-full text-subtext text-xs">
-              Sem dados adicionais
+              Selecione "Todos os vendedores" para ver o ranking de ticket médio.
             </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Gráficos — Pizzas lado a lado ─────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Pizza 1 — Faturamento por Marca */}
+        <div className="bg-card border border-card_border rounded-xl p-4">
+          <SectionHeader
+            title={marcaFatTitle}
+            subtitle={filtroVendedor ? 'marcas vendidas por este vendedor' : 'top 8 do mês'}
+          />
+          <PieChart
+            data={marcasFiltradas}
+            nameKey="DescrMarca"
+            valueKey="faturamento"
+            showValue
+            formatter={shortBrl}
+            height={240}
+            highlightKey={filtroMarca}
+          />
+        </div>
+
+        {/* Pizza 2 — Itens (drill-down conforme filtro) */}
+        <div className="bg-card border border-card_border rounded-xl p-4">
+          {filtroVendedor && itensVendedor.length > 0 ? (
+            <>
+              <SectionHeader title={`Top Itens — ${filtroVendedor}`} subtitle="por faturamento no mês" />
+              <PieChart data={itensVendedor} nameKey="DescrItem" valueKey="faturamento" showValue formatter={shortBrl} height={240} />
+            </>
+          ) : filtroMarca && itensMarca.length > 0 ? (
+            <>
+              <SectionHeader title={`Top Itens — ${filtroMarca}`} subtitle="por faturamento no mês" />
+              <PieChart data={itensMarca} nameKey="DescrItem" valueKey="faturamento" showValue formatter={shortBrl} height={240} />
+            </>
+          ) : (
+            <>
+              <SectionHeader title={marcaQtdTitle} subtitle="unidades vendidas" />
+              <PieChart data={marcasFiltradas} nameKey="DescrMarca" valueKey="quantidade" showValue height={240} highlightKey={filtroMarca} />
+            </>
           )}
         </div>
       </div>
