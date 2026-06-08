@@ -9,6 +9,7 @@ export async function apiFetch(path, opts = {}) {
 
   if (res.status === 401) {
     localStorage.removeItem('erp_token');
+    localStorage.removeItem('erp_tabs');
     location.reload();
     return null;
   }

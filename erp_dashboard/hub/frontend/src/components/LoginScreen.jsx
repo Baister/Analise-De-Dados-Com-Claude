@@ -17,6 +17,7 @@ export default function LoginScreen({ onLogin }) {
         body: JSON.stringify({ password }),
       });
       localStorage.setItem('erp_token', data.access_token);
+      localStorage.setItem('erp_tabs', JSON.stringify(data.tabs ?? ['*']));
       onLogin();
     } catch {
       setError('Senha incorreta ou servidor indisponível.');

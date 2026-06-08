@@ -1,4 +1,4 @@
-import { useState, useCallback, Suspense, lazy } from 'react';
+import { useState, useCallback, useMemo, Suspense, lazy } from 'react';
 import { ROUTES } from './routes';
 import LoginScreen from './components/LoginScreen';
 import Sidebar from './components/Sidebar';
@@ -23,16 +23,27 @@ export default function App() {
 
   useSSE(handleBotUpdate, token);
 
+  // Abas permitidas pelo perfil (senha). "*" = todas. Filtra ROUTES.
+  const allowedTabs = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('erp_tabs') || '["*"]'); }
+    catch { return ['*']; }
+  }, [token]);
+
+  const visibleRoutes = useMemo(() =>
+    allowedTabs.includes('*') ? ROUTES : ROUTES.filter(r => allowedTabs.includes(r.key)),
+  [allowedTabs]);
+
   if (!token) {
     return <LoginScreen onLogin={() => setToken(localStorage.getItem('erp_token'))} />;
   }
 
-  const activeRoute = ROUTES.find(r => r.key === activePage) || ROUTES[0];
+  // Aba ativa precisa ser uma das visíveis (fallback p/ a primeira permitida)
+  const activeRoute = visibleRoutes.find(r => r.key === activePage) || visibleRoutes[0];
   const PageComponent = lazy(activeRoute.component);
 
   return (
     <div className="flex h-screen bg-bg overflow-hidden">
-      <Sidebar routes={ROUTES} activePage={activePage} onNavigate={setActivePage} />
+      <Sidebar routes={visibleRoutes} activePage={activeRoute.key} onNavigate={setActivePage} />
       <main className="flex-1 overflow-y-auto p-6">
         <Suspense fallback={<LoadingFallback />}>
           <PageComponent

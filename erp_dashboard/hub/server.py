@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 
-from config.settings import DASHBOARD_PASSWORD, ALERTAS
+from config.settings import DASHBOARD_PASSWORD, ACCESS_PROFILES, ALERTAS
 from core.cache import cache as _cache, _clean_nan as _clean_nan
 
 logger = logging.getLogger(__name__)
@@ -50,21 +50,22 @@ app.add_middleware(
 
 
 # ── Auth ──────────────────────────────────────────────────────────────
-_tokens: dict[str, float] = {}
+# _tokens[token] = {"exp": float, "tabs": list}  (tabs = abas permitidas; "*" = todas)
+_tokens: dict[str, dict] = {}
 TOKEN_TTL = 8 * 3600  # 8 horas
 _bearer = HTTPBearer()
 
 
 def _purge_expired():
     now = time.time()
-    for t in [k for k, exp in _tokens.items() if exp < now]:
+    for t in [k for k, info in _tokens.items() if info["exp"] < now]:
         del _tokens[t]
 
 
 def verify_token(creds: HTTPAuthorizationCredentials = Depends(_bearer)) -> str:
     token = creds.credentials
-    exp = _tokens.get(token)
-    if exp is None or time.time() > exp:
+    info = _tokens.get(token)
+    if info is None or time.time() > info["exp"]:
         _tokens.pop(token, None)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -80,12 +81,24 @@ async def verify_token_or_query(
     token: Optional[str] = Query(default=None),
 ) -> str:
     t = (creds.credentials if creds else None) or token
-    exp = _tokens.get(t) if t else None
-    if not t or exp is None or time.time() > exp:
+    info = _tokens.get(t) if t else None
+    if not t or info is None or time.time() > info["exp"]:
         if t:
             _tokens.pop(t, None)
         raise HTTPException(status_code=401, detail="Token inválido ou expirado")
     return t
+
+
+def _tabs_for(token: str) -> list:
+    info = _tokens.get(token)
+    return info["tabs"] if info else []
+
+
+def _require_tab(token: str, tab: str):
+    """Bloqueia (403) se o perfil do token não inclui a aba pedida."""
+    tabs = _tabs_for(token)
+    if "*" not in tabs and tab not in tabs:
+        raise HTTPException(status_code=403, detail=f"Acesso negado à aba '{tab}'")
 
 
 class AuthRequest(BaseModel):
@@ -99,12 +112,13 @@ class MetasPayload(BaseModel):
 
 @app.post("/auth")
 def login(req: AuthRequest):
-    if req.password != DASHBOARD_PASSWORD:
+    tabs = ACCESS_PROFILES.get(req.password)
+    if tabs is None:
         raise HTTPException(status_code=400, detail="Senha incorreta")
     _purge_expired()
     token = secrets.token_urlsafe(32)
-    _tokens[token] = time.time() + TOKEN_TTL
-    return {"access_token": token, "token_type": "bearer"}
+    _tokens[token] = {"exp": time.time() + TOKEN_TTL, "tabs": tabs}
+    return {"access_token": token, "token_type": "bearer", "tabs": tabs}
 
 
 # ── Root ──────────────────────────────────────────────────────────────
@@ -134,7 +148,8 @@ def get_metas(_: str = Depends(verify_token)):
 
 
 @app.post("/metas")
-def post_metas(payload: MetasPayload, _: str = Depends(verify_token)):
+def post_metas(payload: MetasPayload, token: str = Depends(verify_token)):
+    _require_tab(token, "configuracoes")
     if payload.meta_mensal_total < 0:
         raise HTTPException(status_code=422, detail="meta_mensal_total deve ser >= 0")
     if any(v < 0 for v in payload.metas_individuais.values()):
@@ -227,8 +242,10 @@ def dados_cliente(
     cliente: Optional[str] = Query(default=None),
     marca: Optional[str] = Query(default=None),
     produto: Optional[str] = Query(default=None),
-    _: str = Depends(verify_token),
+    token: str = Depends(verify_token),
 ):
+    _require_tab(token, "cliente")
+
     def _valid_date(s: str) -> bool:
         return bool(s and _re.fullmatch(r'\d{4}-\d{2}-\d{2}', s))
 
@@ -300,8 +317,10 @@ def dados_cliente_comportamento(
     ate:      Optional[str] = Query(default=None),
     vendedor: Optional[str] = Query(default=None),
     marca:    Optional[str] = Query(default=None),
-    _: str = Depends(verify_token),
+    token: str = Depends(verify_token),
 ):
+    _require_tab(token, "cliente_comportamento")
+
     def _valid_date(s: str) -> bool:
         return bool(s and _re.fullmatch(r'\d{4}-\d{2}-\d{2}', s))
 
@@ -422,8 +441,9 @@ def dados_filtrado(
     dt_de:           Optional[str] = Query(default=None),
     dt_ate:          Optional[str] = Query(default=None),
     dias_atraso_min: Optional[str] = Query(default=None),
-    _: str = Depends(verify_token),
+    token: str = Depends(verify_token),
 ):
+    _require_tab(token, bot_name)
     if _manager is None:
         raise HTTPException(status_code=503, detail="Hub não iniciado — modo cliente")
 
@@ -449,7 +469,8 @@ def dados_filtrado(
 
 
 @app.get("/dados/{bot_name}")
-def dados(bot_name: str, _: str = Depends(verify_token)):
+def dados(bot_name: str, token: str = Depends(verify_token)):
+    _require_tab(token, bot_name)
     try:
         data = _cache.load(bot_name)
     except Exception as e:
