@@ -237,6 +237,78 @@ class BotDashboard(BaseBot):
         else:
             df_marcas_vend = pd.DataFrame()
 
+        # ── KPIs e top itens POR VENDEDOR — para filtragem client-side (padrão aba Vendas)
+        kpis_por_vendedor: list = []
+        top_itens_por_vendedor: dict = {}
+        if _cod_vend_map:
+            _in_cv = ','.join(f"'{c}'" for c in _cod_vend_map)
+
+            df_kpi_vend = db.new_conn_query(f"""
+                SELECT v.CodVend,
+                    SUM(v.ValVndTotal)                                            AS venda_liq,
+                    SUM(v.CustoRepTotal)                                          AS custo_rep,
+                    SUM(v.TotalFrete)                                             AS frete,
+                    COUNT(DISTINCT v.NrDoc)                                       AS qtd_vendas_bruta,
+                    COUNT(DISTINCT CASE WHEN v.CustoRepTotal < 0 THEN v.NrDoc END) AS qtd_vendas_dev
+                FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                WHERE v.DtVnd >= {_MES_INI} AND v.DtVnd < {_MES_FIM} {_EXCLUIR_PLANO}
+                GROUP BY v.CodVend
+            """)
+            df_dev_vend = db.new_conn_query(f"""
+                SELECT d.CodVend, SUM(d.ValTotItem) AS devolucoes
+                FROM Blue.dbo.vmMetricasMotivoDevItem d WITH (NOLOCK)
+                WHERE d.DtVnd >= {_MES_INI} AND d.DtVnd < {_MES_FIM}
+                  AND d.CodPlanoVnd NOT IN ('004','012','025','027')
+                GROUP BY d.CodVend
+            """)
+            df_canc_vend = db.new_conn_query(f"""
+                SELECT d.CodFuncVnd AS CodVend, SUM(d.ValTotalNFVnd) AS cancelados
+                FROM Blue.dbo.vwVndDoc d WITH (NOLOCK)
+                WHERE d.DataEmissao >= {_MES_INI} AND d.DataEmissao < {_MES_FIM}
+                  AND d.TipoMovimento = '1.5-Documentos Cancelados'
+                  AND d.CodPlanoVnd NOT IN ('004','012','025','027')
+                GROUP BY d.CodFuncVnd
+            """)
+
+            _dev_map  = dict(zip(df_dev_vend['CodVend'].astype(str),  df_dev_vend['devolucoes'])) if not df_dev_vend.empty else {}
+            _canc_map = dict(zip(df_canc_vend['CodVend'].astype(str), df_canc_vend['cancelados'])) if not df_canc_vend.empty else {}
+
+            if not df_kpi_vend.empty:
+                for _, _r in df_kpi_vend.iterrows():
+                    _c = str(_r['CodVend']); _nome = _cod_vend_map.get(_c)
+                    if not _nome:
+                        continue
+                    _vl = float(_r['venda_liq'] or 0); _cr = float(_r['custo_rep'] or 0); _fr = float(_r['frete'] or 0)
+                    _qb = int(_r['qtd_vendas_bruta'] or 0); _qd = int(_r['qtd_vendas_dev'] or 0)
+                    _dv = float(_dev_map.get(_c, 0) or 0); _cn = float(_canc_map.get(_c, 0) or 0)
+                    kpis_por_vendedor.append({
+                        "CodVend": _c, "Vendedor": _nome,
+                        "kpi_venda_liquida": _vl, "kpi_custo_rep": _cr, "kpi_frete": _fr,
+                        "qtd_vendas_bruta": _qb, "qtd_vendas_dev": _qd,
+                        "kpi_devolucoes": _dv, "kpi_cancelados": _cn,
+                        "kpi_faturamento_bruto": _vl + _dv + _cn,
+                        "kpi_lucro_bruto": _vl - _cr,
+                        "ticket_medio": (_vl / _qb) if _qb > 0 else 0.0,
+                    })
+
+            df_itens_vend = db.new_conn_query(f"""
+                SELECT i.CodVend, i.CodItem,
+                    MAX(i.DescrItem) AS DescrItem, MAX(i.DescrMarca) AS DescrMarca,
+                    SUM(i.QtdItem) AS quantidade, SUM(i.PrecoVndTotItem) AS venda_liq_prod
+                FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+                WHERE i.DtVnd >= {_MES_INI} AND i.DtVnd < {_MES_FIM}
+                  AND i.DescrItem IS NOT NULL
+                  AND i.CodPlanoVnd NOT IN ('004','012','025','027')
+                  AND i.CodVend IN ({_in_cv})
+                GROUP BY i.CodVend, i.CodItem
+            """)
+            if not df_itens_vend.empty:
+                df_itens_vend['Vendedor'] = df_itens_vend['CodVend'].astype(str).map(_cod_vend_map)
+                for _nome, _grp in df_itens_vend.dropna(subset=['Vendedor']).groupby('Vendedor'):
+                    top_itens_por_vendedor[_nome] = (_grp.sort_values('quantidade', ascending=False)
+                        .head(8)[['CodItem', 'DescrItem', 'DescrMarca', 'quantidade', 'venda_liq_prod']]
+                        .to_dict('records'))
+
         df_diario_vend = db.query(f"""
             SELECT
                 CONVERT(date, v.DtVnd) AS dia,
@@ -347,6 +419,8 @@ class BotDashboard(BaseBot):
             "faturamento_diario_por_vendedor": df_diario_vend.to_dict("records"),
             "faturamento_diario_por_marca":    df_diario_marca.to_dict("records"),
             "top_itens_mes":                   df_top_itens.to_dict("records"),
+            "kpis_por_vendedor":               kpis_por_vendedor,
+            "top_itens_por_vendedor":          top_itens_por_vendedor,
             "kpi_venda_liquida":               kpi_venda_liquida,
             "kpi_devolucoes":                  kpi_devolucoes,
             "kpi_cancelados":                  kpi_cancelados,

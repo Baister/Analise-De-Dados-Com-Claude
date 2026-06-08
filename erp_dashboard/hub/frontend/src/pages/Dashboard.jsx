@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useDados, useFilteredDados, apiFetch } from '../hooks/useApi';
+import { useDados, apiFetch } from '../hooks/useApi';
 import { useMetas } from '../hooks/useMetas';
 import KpiCard from '../components/KpiCard';
 import FilterBar from '../components/FilterBar';
@@ -66,46 +66,36 @@ export default function Dashboard({ refreshTrigger }) {
   const [filtroVendedor, setFiltroVendedor] = useState(null);
   const [filtroMarca, setFiltroMarca]       = useState(null);
 
-  // Listas globais para os dropdowns — preservadas mesmo quando filtro está ativo
-  const [globalVendedores, setGlobalVendedores] = useState([]);
-  const [globalMarcas,     setGlobalMarcas]     = useState([]);
-
-  // Filtro server-side por CODIGO do vendedor (CodVend) → /dados/dashboard/filtered?cod_vend=00138
-  const filterObj = useMemo(() =>
-    filtroVendedor ? { cod_vend: filtroVendedor } : {},
-  [filtroVendedor]);
-
-  const { data, loading, error, isEmpty } = useFilteredDados('dashboard', filterObj, refreshTrigger);
+  // Filtragem 100% client-side (padrão da aba Vendas) — payload global único
+  const { data, loading, error, isEmpty } = useDados('dashboard', refreshTrigger);
   const { metas } = useMetas();
   const mIndiv = metas?.metas_individuais ?? {};
-
-  // Salva listas globais quando não há filtro de vendedor ativo
-  useEffect(() => {
-    if (!filtroVendedor) {
-      if (data?.top_vendedores?.length) setGlobalVendedores(data.top_vendedores);
-      if (data?.marcas_mes?.length)     setGlobalMarcas(data.marcas_mes);
-    }
-  }, [data, filtroVendedor]);
 
   useEffect(() => {
     apiFetch('/config').then(d => d && setMeta(d.meta_faturamento_mensal)).catch(() => {});
   }, []);
 
-  // Dropdowns sempre mostram opções globais (mesmo com filtro ativo)
-  const topVendedores = globalVendedores.length ? globalVendedores : (data?.top_vendedores ?? []);
-  const marcasMes     = globalMarcas.length     ? globalMarcas     : (data?.marcas_mes     ?? []);
-  const topItens      = useMemo(() => (data?.top_itens_mes ?? []).slice(0, 8), [data]);
+  const topVendedores = useMemo(() => data?.top_vendedores ?? [], [data]);
+  const marcasMes     = useMemo(() => data?.marcas_mes ?? [],     [data]);
 
-  // Vendedor selecionado (por CodVend) — para nome/label/meta
-  const vendSel = useMemo(
-    () => (topVendedores ?? []).find(v => String(v.CodVend) === String(filtroVendedor)),
-    [topVendedores, filtroVendedor]
-  );
+  // KPI ativo: registro do vendedor (kpis_por_vendedor) qdo filtrado; senão escalares globais
+  const kpiAtivo = useMemo(() => {
+    if (filtroVendedor) {
+      return (data?.kpis_por_vendedor ?? []).find(v => v.Vendedor === filtroVendedor) ?? {};
+    }
+    return data ?? {};
+  }, [data, filtroVendedor]);
+
+  // Top itens: por vendedor (dict) qdo filtrado; senão global
+  const topItens = useMemo(() => {
+    if (filtroVendedor) return (data?.top_itens_por_vendedor?.[filtroVendedor] ?? []).slice(0, 8);
+    return (data?.top_itens_mes ?? []).slice(0, 8);
+  }, [data, filtroVendedor]);
 
   const fatDiario = useMemo(() => {
     if (!data) return [];
     if (filtroVendedor) {
-      return data.faturamento_diario ?? [];          // servidor já filtrou por CodVend
+      return agregaPorDia(data.faturamento_diario_por_vendedor ?? [], 'Vendedor', filtroVendedor);
     }
     if (filtroMarca) {
       return agregaPorDia(data.faturamento_diario_por_marca ?? [], 'DescrMarca', filtroMarca);
@@ -113,51 +103,20 @@ export default function Dashboard({ refreshTrigger }) {
     return data.faturamento_diario ?? [];
   }, [data, filtroVendedor, filtroMarca]);
 
-  const kpis = useMemo(() => {
-    if (!data) return {};
-    // filtroVendedor: server já retornou data filtrado — usar data diretamente
-    if (filtroMarca) {
-      const marca = marcasMes.find(m => m.DescrMarca === filtroMarca);
-      if (marca) {
-        const vlp = marca.venda_liq_prod ?? 0;
-        const lp  = marca.lucro_prod     ?? 0;
-        return {
-          ticket_medio:  0,
-          margem_bruta:  lp,
-          pct_margem:    vlp > 0 ? (lp / vlp) * 100 : 0,
-        };
-      }
-    }
-    return {
-      ticket_medio:  data.ticket_medio  ?? 0,
-      margem_bruta:  data.margem_bruta  ?? 0,
-      pct_margem:    (() => { const vb = data.venda_bruta ?? 0; const mb = data.margem_bruta ?? 0; return vb > 0 ? (mb / vb) * 100 : 0; })(),
-    };
-  }, [data, filtroMarca, marcasMes]);
-
-  // Opções do dropdown de vendedor: value=CodVend, label=nome (deduplicado por código)
-  const vendedoresOpts   = useMemo(() => {
-    const seen = new Map();
-    (topVendedores ?? []).forEach(v => {
-      if (v.CodVend != null && !seen.has(String(v.CodVend))) seen.set(String(v.CodVend), v.Vendedor);
-    });
-    return [...seen].map(([value, label]) => ({ value, label }));
-  }, [topVendedores]);
+  const vendedoresOpts   = useMemo(() => getUniqueValues(topVendedores, 'Vendedor'), [topVendedores]);
   const marcasOpts       = useMemo(() => getUniqueValues(marcasMes, 'DescrMarca'),   [marcasMes]);
+
+  const hasMarcasVend = Boolean(data?.marcas_por_vendedor?.length);
   const topVendedoresFiltrados = useMemo(() => {
-    // Marca selecionada: usa marcas_por_vendedor do dado GLOBAL
-    const mvend = globalVendedores.length && data?.marcas_por_vendedor?.length
-      ? data.marcas_por_vendedor
-      : null;
-    if (filtroMarca && mvend) {
-      return mvend
+    if (filtroMarca && hasMarcasVend) {
+      return data.marcas_por_vendedor
         .filter(m => m.DescrMarca === filtroMarca)
         .sort((a, b) => (b.venda_liq_prod ?? 0) - (a.venda_liq_prod ?? 0))
         .slice(0, 10);
     }
-    // Vendedor filtrado → data.top_vendedores já é só o vendedor; senão global
-    return (data?.top_vendedores ?? []).slice(0, 10);
-  }, [data, filtroMarca, globalVendedores]);
+    if (filtroVendedor) return topVendedores.filter(v => v.Vendedor === filtroVendedor);
+    return topVendedores.slice(0, 10);
+  }, [data, filtroMarca, filtroVendedor, hasMarcasVend, topVendedores]);
 
   const vendYAxisWidth   = useMemo(() => {
     const src = filtroMarca ? topVendedoresFiltrados : topVendedores;
@@ -166,14 +125,14 @@ export default function Dashboard({ refreshTrigger }) {
   }, [filtroMarca, topVendedoresFiltrados, topVendedores]);
 
   const metaVal = useMemo(() => {
-    if (filtroVendedor && vendSel) {
+    if (filtroVendedor) {
       const m = Object.entries(mIndiv).find(
-        ([k]) => k.trim().toLowerCase() === (vendSel.Vendedor ?? '').trim().toLowerCase()
+        ([k]) => k.trim().toLowerCase() === filtroVendedor.trim().toLowerCase()
       )?.[1];
       return m ?? 0;                       // 0 → "sem meta individual"
     }
     return meta ?? data?.meta_mensal ?? 0; // meta da empresa
-  }, [filtroVendedor, vendSel, mIndiv, meta, data]);
+  }, [filtroVendedor, mIndiv, meta, data]);
 
   const metaDiaria = useMemo(() => {
     if (!metaVal) return 0;
@@ -183,20 +142,20 @@ export default function Dashboard({ refreshTrigger }) {
 
   const fatHoje = useMemo(() => {
     const hoje = new Date().toISOString().slice(0, 10);
-    const entry = (data?.faturamento_diario ?? []).find(r => String(r.dia).slice(0, 10) === hoje);
+    const entry = fatDiario.find(r => String(r.dia).slice(0, 10) === hoje);
     return entry?.faturamento ?? 0;
-  }, [data]);
+  }, [fatDiario]);
 
   const pctMetaDiaria = useMemo(() =>
     metaDiaria > 0 ? (fatHoje / metaDiaria) * 100 : 0,
   [fatHoje, metaDiaria]);
 
   const marcasFiltradas = useMemo(() => {
-    if (filtroVendedor) {
-      return (data?.marcas_mes ?? []).slice(0, 8);   // servidor já filtrou por CodVend
+    if (filtroVendedor && hasMarcasVend) {
+      return data.marcas_por_vendedor.filter(m => m.Vendedor === filtroVendedor).slice(0, 8);
     }
     return marcasMes.slice(0, 8);
-  }, [data, filtroVendedor, marcasMes]);
+  }, [data, filtroVendedor, hasMarcasVend, marcasMes]);
 
   const filterDefs = useMemo(() => [
     { key: 'Vendedor',   label: 'Vendedor', type: 'select', options: vendedoresOpts },
@@ -208,8 +167,8 @@ export default function Dashboard({ refreshTrigger }) {
     DescrMarca: filtroMarca   ?? 'todos',
   }), [filtroVendedor, filtroMarca]);
 
-  // pctMeta: kpi_venda_liquida (filtrado por CodVend qdo vendedor ativo) ÷ meta (individual ou empresa)
-  const pctMeta = metaVal > 0 ? ((data?.kpi_venda_liquida ?? 0) / metaVal) * 100 : 0;
+  // pctMeta: venda líquida do KPI ativo (vendedor ou global) ÷ meta (individual ou empresa)
+  const pctMeta = metaVal > 0 ? ((kpiAtivo.kpi_venda_liquida ?? 0) / metaVal) * 100 : 0;
 
   function handleFilterChange(newFilters) {
     const newVend  = newFilters.Vendedor   !== 'todos' ? (newFilters.Vendedor   ?? null) : null;
@@ -241,7 +200,7 @@ export default function Dashboard({ refreshTrigger }) {
 
   if (isEmpty) return <ProcessingScreen label="Bot Dashboard" />;
 
-  const nomeVend = (vendSel?.Vendedor ?? '').trim();
+  const nomeVend = (filtroVendedor ?? '').trim();
 
   const filtroLabel = filtroVendedor
     ? `Vendedor: ${nomeVend}`
@@ -251,7 +210,7 @@ export default function Dashboard({ refreshTrigger }) {
     ? `Faturamento Diário — ${nomeVend}`
     : filtroMarca ? `Faturamento Diário — ${filtroMarca}` : 'Faturamento Diário';
 
-  const lucroColor = (data?.kpi_lucro_bruto ?? 0) > 0 ? '#10b981' : '#ef4444';
+  const lucroColor = (kpiAtivo.kpi_lucro_bruto ?? 0) > 0 ? '#10b981' : '#ef4444';
 
   return (
     <div style={{ padding: 16 }}>
@@ -283,12 +242,12 @@ export default function Dashboard({ refreshTrigger }) {
           <StatCard
             label="Faturamento Bruto"
             sub="Valor Bruto das Vendas (R$)"
-            value={data?.kpi_faturamento_bruto}
+            value={kpiAtivo.kpi_faturamento_bruto}
             color="#3b82f6"
           />
           <StatCard
             label="Quantidade de Vendas"
-            value={data?.qtd_vendas_bruta}
+            value={kpiAtivo.qtd_vendas_bruta}
             color="#475569"
             count
             small
@@ -300,12 +259,12 @@ export default function Dashboard({ refreshTrigger }) {
           <StatCard
             label="Devoluções"
             sub="vmMetricasMotivoDevItem"
-            value={data?.kpi_devolucoes}
+            value={kpiAtivo.kpi_devolucoes}
             color="#f59e0b"
           />
           <StatCard
             label="Quantidade de Devoluções"
-            value={data?.qtd_vendas_dev}
+            value={kpiAtivo.qtd_vendas_dev}
             color="#78716c"
             count
             small
@@ -317,12 +276,12 @@ export default function Dashboard({ refreshTrigger }) {
           <StatCard
             label="Documentos Cancelados"
             sub="vwVndDoc — TipoMovimento 1.5"
-            value={data?.kpi_cancelados}
+            value={kpiAtivo.kpi_cancelados}
             color="#ef4444"
           />
           <StatCard
             label="Lucro Bruto"
-            value={data?.kpi_lucro_bruto}
+            value={kpiAtivo.kpi_lucro_bruto}
             color={lucroColor}
             small
           />
@@ -333,12 +292,12 @@ export default function Dashboard({ refreshTrigger }) {
           <StatCard
             label="Faturamento Líquido Mês"
             sub="Venda Líquida (R$)"
-            value={data?.kpi_venda_liquida}
+            value={kpiAtivo.kpi_venda_liquida}
             color="#22c55e"
           />
           <StatCard
             label="Custo de Reposição Líquida"
-            value={data?.kpi_custo_rep}
+            value={kpiAtivo.kpi_custo_rep}
             color="#a855f7"
             small
           />
@@ -369,14 +328,14 @@ export default function Dashboard({ refreshTrigger }) {
         />
         <KpiCard
           label="Ticket Médio"
-          value={brl(data?.ticket_medio ?? 0)}
+          value={brl(kpiAtivo.ticket_medio ?? 0)}
           variant="default"
           topBorder="#64748b"
           labelColor="#f1f5f9"
         />
         <KpiCard
           label="Frete"
-          value={brl(data?.kpi_frete ?? 0)}
+          value={brl(kpiAtivo.kpi_frete ?? 0)}
           variant="default"
           topBorder="#64748b"
           labelColor="#f1f5f9"
