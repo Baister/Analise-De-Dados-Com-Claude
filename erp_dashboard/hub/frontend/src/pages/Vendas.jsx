@@ -153,10 +153,16 @@ export default function Vendas({ refreshTrigger }) {
   const hasMarcasVend = Boolean(data?.marcas_por_vendedor?.length);
 
   const marcasFiltradas = useMemo(() => {
-    if (filtroVendedor && hasMarcasVend) {
-      return data.marcas_por_vendedor.filter(m => m.Vendedor === filtroVendedor).slice(0, 8);
-    }
-    return marcasMes.slice(0, 8);
+    const base = (filtroVendedor && hasMarcasVend)
+      ? data.marcas_por_vendedor.filter(m => m.Vendedor === filtroVendedor).slice(0, 8)
+      : marcasMes.slice(0, 8);
+    // Campos derivados para o tooltip: faturamento líquido e margem bruta %
+    return base.map(m => {
+      const fat = m.faturamento ?? 0;
+      const dev = m.devolucao ?? 0;          // negativo
+      const mar = m.margem_bruta ?? 0;
+      return { ...m, _fat_liq: fat + dev, _margem_pct: fat > 0 ? (mar / fat) * 100 : 0 };
+    });
   }, [data, filtroVendedor, hasMarcasVend, marcasMes]);
 
   const topVendedoresFiltrados = useMemo(() => {
@@ -262,6 +268,21 @@ export default function Vendas({ refreshTrigger }) {
     ? ((kpiAtivo.kpi_lucro_bruto ?? 0) / kpiAtivo.kpi_venda_liquida) * 100
     : 0;
   const margemCor = margemBruta >= 30 ? '#22c55e' : margemBruta >= 25 ? '#f59e0b' : '#ef4444';
+
+  // Tooltips das pizzas de marca: qtd vendida, qtd devoluções, fat. líquido, margem bruta
+  const _fmtNum = n => (n ?? 0).toLocaleString('pt-BR');
+  const tipMarcaFat = [
+    { key: 'quantidade',     label: 'Qtd Vendida',    formatter: _fmtNum },
+    { key: 'qtd_devolucoes', label: 'Qtd Devoluções', formatter: _fmtNum },
+    { key: '_fat_liq',       label: 'Fat. Líquido',   formatter: brl },
+    { key: '_margem_pct',    label: 'Margem Bruta',   formatter: pct },
+  ];
+  const tipMarcaQtd = [
+    { key: 'faturamento',    label: 'Faturamento',    formatter: brl },
+    { key: 'qtd_devolucoes', label: 'Qtd Devoluções', formatter: _fmtNum },
+    { key: '_fat_liq',       label: 'Fat. Líquido',   formatter: brl },
+    { key: '_margem_pct',    label: 'Margem Bruta',   formatter: pct },
+  ];
 
   return (
     <div className="p-6 space-y-6">
@@ -390,6 +411,7 @@ export default function Vendas({ refreshTrigger }) {
             formatter={shortBrl}
             height={240}
             highlightKey={filtroMarca}
+            tooltipContext={{ title: 'Faturamento', extra: tipMarcaFat }}
           />
         </div>
 
@@ -408,7 +430,16 @@ export default function Vendas({ refreshTrigger }) {
           ) : (
             <>
               <SectionHeader title={marcaQtdTitle} subtitle="unidades vendidas" />
-              <PieChart data={marcasFiltradas} nameKey="DescrMarca" valueKey="quantidade" showValue height={240} highlightKey={filtroMarca} />
+              <PieChart
+                data={marcasFiltradas}
+                nameKey="DescrMarca"
+                valueKey="quantidade"
+                showValue
+                formatter={_fmtNum}
+                height={240}
+                highlightKey={filtroMarca}
+                tooltipContext={{ title: 'Qtd Vendida', extra: tipMarcaQtd }}
+              />
             </>
           )}
         </div>
