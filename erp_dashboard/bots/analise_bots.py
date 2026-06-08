@@ -844,6 +844,7 @@ class BotVendas(BaseBot):
                     SUM(CASE WHEN i.CustoRepTotItem <  0 THEN i.PrecoVndTotItem ELSE 0 END) AS devolucao,
                     SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.PrecoVndTotItem - i.CustoRepTotItem ELSE 0 END) AS margem_bruta,
                     SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.QtdItem ELSE 0 END)         AS quantidade,
+                    COUNT(DISTINCT CASE WHEN i.CustoRepTotItem >= 0 THEN i.NrDoc END)       AS qtd_documentos,
                     COUNT(DISTINCT CASE WHEN i.CustoRepTotItem < 0 THEN i.NrDoc END)        AS qtd_devolucoes
                 FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
                 WHERE i.DtVnd >= {_MES_INI}
@@ -857,7 +858,7 @@ class BotVendas(BaseBot):
             if not _raw_mv.empty:
                 _raw_mv['Vendedor'] = _raw_mv['CodVend'].astype(str).map(_cod_vend_map_v)
                 df_marcas_vend = _raw_mv.dropna(subset=['Vendedor'])[
-                    ['Vendedor', 'DescrMarca', 'faturamento', 'devolucao', 'margem_bruta', 'quantidade', 'qtd_devolucoes']
+                    ['Vendedor', 'DescrMarca', 'faturamento', 'devolucao', 'margem_bruta', 'quantidade', 'qtd_documentos', 'qtd_devolucoes']
                 ].copy()
             else:
                 df_marcas_vend = pd.DataFrame()

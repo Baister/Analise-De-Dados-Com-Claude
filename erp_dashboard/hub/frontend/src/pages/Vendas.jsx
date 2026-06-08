@@ -176,11 +176,15 @@ export default function Vendas({ refreshTrigger }) {
   }, [data, filtroMarca, hasMarcasVend, topVendedores]);
 
   // Dados do bar "Top Vendedores": 👑 no Top 1 (índice 0, exceto ao filtrar 1 vendedor)
-  // + _fat_liq (faturamento líquido = bruto + devolução) para o tooltip.
+  // + campos unificados p/ tooltip, que funcionam nas DUAS fontes:
+  //   - sem filtro / filtro de vendedor → top_vendedores (qtd_pedidos, total_venda)
+  //   - filtro de marca               → marcas_por_vendedor (qtd_documentos, faturamento)
   const topVendData = useMemo(() => topVendedoresFiltrados.map((v, i) => ({
     ...v,
     _disp: (!filtroVendedor && i === 0 ? '👑 ' : '') + (v.Vendedor ?? ''),
-    _fat_liq: (v.total_venda ?? 0) + (v.devolucao ?? 0),
+    _qtd_vendas: v.qtd_pedidos    ?? v.qtd_documentos ?? 0,
+    _qtd_dev:    v.qtd_devolucoes ?? 0,
+    _fat_liq:    (v.total_venda ?? v.faturamento ?? 0) + (v.devolucao ?? 0),
   })), [topVendedoresFiltrados, filtroVendedor]);
 
   const ticketFiltrado = useMemo(() => {
@@ -357,9 +361,9 @@ export default function Vendas({ refreshTrigger }) {
             xKey="_disp"
             bars={[{ key: barKey, label: 'Total', formatter: shortBrl }]}
             tooltipExtra={[
-              { key: 'qtd_pedidos',    label: 'Qtd Vendas' },
-              { key: 'qtd_devolucoes', label: 'Qtd Devoluções' },
-              { key: '_fat_liq',       label: 'Fat. Líquido', formatter: brl },
+              { key: '_qtd_vendas', label: 'Qtd Vendas',     formatter: _fmtNum },
+              { key: '_qtd_dev',    label: 'Qtd Devoluções', formatter: _fmtNum },
+              { key: '_fat_liq',    label: 'Fat. Líquido',   formatter: brl },
             ]}
             horizontal
             showLabels
