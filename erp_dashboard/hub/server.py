@@ -215,7 +215,11 @@ async def stream(_: str = Depends(verify_token_or_query)):
 
 # ── Endpoints de dados ────────────────────────────────────────────────
 @app.get("/status")
-def status_route(_: str = Depends(verify_token)):
+def status_route(token: str = Depends(verify_token)):
+    # Mostra só os bots das abas do perfil (ex.: vendas não vê Estoque/Financeiro/CRM)
+    tabs = _tabs_for(token)
+    def _allowed(name: str) -> bool:
+        return "*" in tabs or name in tabs
     if _manager is not None:
         return {
             "bots": {
@@ -226,10 +230,11 @@ def status_route(_: str = Depends(verify_token)):
                     "seconds_until_next": b.seconds_until_next(),
                 }
                 for name, b in _manager.bots.items()
+                if _allowed(name)
             }
         }
     st = _cache.status()
-    return {"bots": {name: info for name, info in st.items()}}
+    return {"bots": {name: info for name, info in st.items() if _allowed(name)}}
 
 
 # NOTE: /dados/cliente must be registered BEFORE /dados/{bot_name} to avoid

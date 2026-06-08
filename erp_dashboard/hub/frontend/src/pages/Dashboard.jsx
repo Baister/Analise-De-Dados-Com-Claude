@@ -138,8 +138,12 @@ export default function Dashboard({ refreshTrigger }) {
       )?.[1];
       return m ?? 0;                       // 0 → "sem meta individual"
     }
-    return meta ?? data?.meta_mensal ?? 0; // meta da empresa
-  }, [filtroVendedor, mIndiv, meta, data]);
+    // Meta da empresa: prioriza a "Meta Mensal Total" definida em Configurações
+    // (metas.json via useMetas); senão cai para /config (meta_faturamento_mensal).
+    return (metas?.meta_mensal_total || 0) > 0
+      ? metas.meta_mensal_total
+      : (meta ?? data?.meta_mensal ?? 0);
+  }, [filtroVendedor, mIndiv, metas, meta, data]);
 
   const metaDiaria = useMemo(() => {
     if (!metaVal) return 0;
