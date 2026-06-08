@@ -1,7 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useDados } from '../hooks/useApi';
 import { useMetas } from '../hooks/useMetas';
-import KpiCard from '../components/KpiCard';
 import FilterBar from '../components/FilterBar';
 import BarChart from '../charts/BarChart';
 import PieChart from '../charts/PieChart';
@@ -14,6 +13,29 @@ function SectionHeader({ title, subtitle }) {
     <div className="flex items-baseline gap-3 mb-3">
       <h2 className="text-sm font-semibold text-text_main">{title}</h2>
       {subtitle && <span className="text-xs text-subtext">{subtitle}</span>}
+    </div>
+  );
+}
+
+// Rótulo de seção + StatCard — mesmo visual da aba Dashboard
+function SectionLabel({ children, first }) {
+  return (
+    <p style={{ fontSize: 10, color: '#475569', textTransform: 'uppercase', letterSpacing: '1px', marginTop: first ? 0 : 18, marginBottom: 8 }}>
+      {children}
+    </p>
+  );
+}
+
+function StatCard({ label, sub, value, text, count = false, color, valueColor, gradient, small = false }) {
+  const style = { background: '#1e293b', borderLeft: `3px solid ${color}`, padding: small ? '10px 14px' : '14px 16px' };
+  if (gradient) style.backgroundImage = `linear-gradient(135deg, ${gradient}, transparent 60%)`;
+  return (
+    <div className="rounded-lg" style={style}>
+      <div style={{ fontSize: 9, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 2 }}>{label}</div>
+      {sub && <div style={{ fontSize: 9, color: '#334155', marginBottom: 5 }}>{sub}</div>}
+      <div style={{ fontSize: small ? 18 : 22, fontWeight: 700, color: valueColor ?? color, lineHeight: 1.1 }}>
+        {text != null ? text : value == null ? '—' : count ? value.toLocaleString('pt-BR') : brl(value)}
+      </div>
     </div>
   );
 }
@@ -117,6 +139,15 @@ export default function Vendas({ refreshTrigger }) {
       clientes_ativos:   data.clientes_ativos ?? 0,
     };
   }, [data, filtroVendedor, filtroMarca, topVendedores, marcasMes]);
+
+  // KPI ativo (mesma fórmula do Dashboard): registro do vendedor/marca quando
+  // filtrado; senão os escalares globais. Para Faturamento Bruto, Devoluções,
+  // Margem, Ticket, contagens — tudo coerente com a aba Dashboard.
+  const kpiAtivo = useMemo(() => {
+    if (filtroVendedor) return (data?.kpis_por_vendedor ?? []).find(v => v.Vendedor === filtroVendedor) ?? {};
+    if (filtroMarca)    return (data?.kpis_por_marca ?? []).find(m => m.DescrMarca === filtroMarca) ?? {};
+    return data ?? {};
+  }, [data, filtroVendedor, filtroMarca]);
 
   /* ── Dados filtrados para os gráficos ─────────────────────────── */
   const hasMarcasVend = Boolean(data?.marcas_por_vendedor?.length);
@@ -226,10 +257,11 @@ export default function Vendas({ refreshTrigger }) {
   const marcaFatTitle  = filtroVendedor ? `Marcas — ${filtroVendedor}` : 'Faturamento por Marca';
   const marcaQtdTitle  = filtroVendedor ? `Itens Vendidos — ${filtroVendedor}` : 'Itens Vendidos por Marca';
 
-  // Margem Bruta — faixas de cor (igual Dashboard): >=30 verde | 25–29,99 amarelo | <25 vermelho
-  const margemCor = (kpis.pct_margem ?? 0) >= 30 ? '#22c55e'
-    : (kpis.pct_margem ?? 0) >= 25 ? '#f59e0b' : '#ef4444';
-  const devVariant    = Math.abs(kpis.devolucao ?? 0) > 5000 ? 'error' : 'default';
+  // Margem Bruta = Lucro Bruto / Venda Líquida (fórmula do Dashboard; reflete filtro via kpiAtivo)
+  const margemBruta = (kpiAtivo.kpi_venda_liquida ?? 0) > 0
+    ? ((kpiAtivo.kpi_lucro_bruto ?? 0) / kpiAtivo.kpi_venda_liquida) * 100
+    : 0;
+  const margemCor = margemBruta >= 30 ? '#22c55e' : margemBruta >= 25 ? '#f59e0b' : '#ef4444';
 
   return (
     <div className="p-6 space-y-6">
@@ -250,35 +282,43 @@ export default function Vendas({ refreshTrigger }) {
         )}
       </div>
 
-      {/* ── KPIs — linha 1: faturamento bruto + devolução + margem ──── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Faturamento do Mês Bruto" value={brl(kpis.faturamento_atual ?? 0)} variant="default" />
-        <KpiCard
-          label="Devolução R$"
-          value={brl(Math.abs(kpis.devolucao ?? 0))}
-          variant={devVariant}
+      {/* ── Resultado Comercial do Mês (estilo Dashboard) ──────────── */}
+      <SectionLabel first>Resultado Comercial do Mês</SectionLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, alignItems: 'start' }}>
+        <StatCard
+          label="Faturamento do Mês Bruto"
+          sub="Venda Líq + Devoluções + Cancelados"
+          value={kpiAtivo.kpi_faturamento_bruto}
+          color="#3b82f6"
         />
-        <KpiCard
+        <StatCard
+          label="Devolução R$"
+          sub="vmMetricasMotivoDevItem"
+          value={kpiAtivo.kpi_devolucoes}
+          color="#f59e0b"
+        />
+        <StatCard
           label="Margem Bruta"
-          value={pct(kpis.pct_margem ?? 0)}
+          sub="Lucro Bruto / Venda Líquida"
+          text={pct(margemBruta)}
+          color={margemCor}
           valueColor={margemCor}
           gradient={`${margemCor}33`}
-          topBorder={margemCor}
-          sub={brl(kpis.margem_bruta ?? 0)}
         />
-        <KpiCard label="Ticket Médio" value={brl(kpis.ticket_medio ?? 0)} variant="default" />
+        <StatCard
+          label="Ticket Médio"
+          value={kpiAtivo.ticket_medio}
+          color="#22c55e"
+        />
       </div>
 
-      {/* ── KPIs — linha 2: operacional ───────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <KpiCard label="Nº Documentos"  value={String(kpis.qtd_documentos ?? 0)} variant="default" />
-        <KpiCard label="Nº Devoluções"  value={String(kpis.qtd_devolucoes ?? 0)} variant="default" />
-        <KpiCard
-          label="Clientes Ativos"
-          value={kpis.clientes_ativos !== null ? String(kpis.clientes_ativos) : '—'}
-          variant="default"
-        />
-        <KpiCard label="Total Marcas"   value={String(marcasMes.length)}          variant="default" />
+      {/* ── Operacional ────────────────────────────────────────────── */}
+      <SectionLabel>Operacional</SectionLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+        <StatCard label="Nº Documentos"  value={kpiAtivo.qtd_vendas_bruta} color="#475569" count small />
+        <StatCard label="Nº Devoluções"  value={kpiAtivo.qtd_vendas_dev}   color="#78716c" count small />
+        <StatCard label="Clientes Ativos" value={kpis.clientes_ativos}     color="#06b6d4" count small />
+        <StatCard label="Total Marcas"   value={marcasMes.length}          color="#a855f7" count small />
       </div>
 
       {/* ── Filtros ────────────────────────────────────────────────── */}
@@ -289,7 +329,7 @@ export default function Vendas({ refreshTrigger }) {
         <div className="bg-card border border-card_border rounded-xl p-4">
           <SectionHeader
             title={barTitle}
-            subtitle={filtroMarca ? 'faturamento nesta marca' : 'por faturamento bruto · 👑 = Top 1'}
+            subtitle={filtroMarca ? 'faturamento nesta marca' : 'por faturamento bruto'}
           />
           <BarChart
             data={topVendData}
