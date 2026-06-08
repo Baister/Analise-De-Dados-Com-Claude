@@ -320,7 +320,7 @@ export default function Vendas({ refreshTrigger }) {
           label="Devolução R$"
           sub="vmMetricasMotivoDevItem"
           value={kpiAtivo.kpi_devolucoes}
-          color="#f59e0b"
+          color="#ef4444"
         />
         <StatCard
           label="Margem Bruta"

@@ -3,6 +3,14 @@ import { useMetas } from '../hooks/useMetas';
 import { useDados } from '../hooks/useApi';
 import { brl } from '../utils/format';
 
+// Parser de número no formato BR: "3.000.000" → 3000000 ; "1.234.567,89" → 1234567.89
+function parseBR(str) {
+  if (str == null) return 0;
+  const cleaned = String(str).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
+  const n = parseFloat(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export default function Configuracoes() {
   const { metas, loading: metasLoading, salvar } = useMetas();
   const { data: vendas } = useDados('vendas');
@@ -22,7 +30,7 @@ export default function Configuracoes() {
     setIndividuais({ ...metas.metas_individuais });
   }, [metas]);
 
-  const totalNum  = parseFloat(totalInput) || 0;
+  const totalNum  = parseBR(totalInput);
   const mediaVend = vendedores.length > 0 ? totalNum / vendedores.length : 0;
 
   function distribuir() {
@@ -37,7 +45,7 @@ export default function Configuracoes() {
     const payload = {
       meta_mensal_total: totalNum,
       metas_individuais: Object.fromEntries(
-        Object.entries(individuais).map(([k, v]) => [k, parseFloat(v) || 0])
+        Object.entries(individuais).map(([k, v]) => [k, parseBR(v)])
       ),
     };
     const res = await salvar(payload);
@@ -67,12 +75,12 @@ export default function Configuracoes() {
         <h2 className="text-sm font-semibold text-text_main">Meta Mensal Total</h2>
         <div className="flex items-center gap-3">
           <input
-            type="number"
-            min="0"
+            type="text"
+            inputMode="decimal"
             value={totalInput}
             onChange={e => setTotalInput(e.target.value)}
             className="flex-1 bg-bg border border-card_border rounded-lg px-3 py-2 text-text_main text-sm focus:outline-none focus:border-accent"
-            placeholder="0"
+            placeholder="Ex.: 3.000.000"
           />
           <button
             onClick={distribuir}
@@ -81,13 +89,17 @@ export default function Configuracoes() {
             Distribuir igualmente
           </button>
         </div>
-        {vendedores.length > 0 && (
-          <p className="text-xs text-subtext">
-            Média por vendedor:{' '}
-            <span className="text-text_main font-medium">{brl(mediaVend)}</span>
-            {' '}({vendedores.length} vendedores)
-          </p>
-        )}
+        <p className="text-xs text-subtext">
+          Meta total:{' '}
+          <span className="text-text_main font-medium">{brl(totalNum)}</span>
+          {vendedores.length > 0 && (
+            <>
+              {'  ·  '}Média por vendedor:{' '}
+              <span className="text-text_main font-medium">{brl(mediaVend)}</span>
+              {' '}({vendedores.length} vendedores)
+            </>
+          )}
+        </p>
       </div>
 
       {/* ── Card 2: Individual ─────────────────────────────────────── */}
@@ -104,8 +116,8 @@ export default function Configuracoes() {
               <div key={v.Vendedor} className="flex items-center gap-3">
                 <span className="flex-1 text-sm text-text_main truncate">{v.Vendedor}</span>
                 <input
-                  type="number"
-                  min="0"
+                  type="text"
+                  inputMode="decimal"
                   value={individuais[v.Vendedor] ?? ''}
                   onChange={e => setIndividuais(prev => ({ ...prev, [v.Vendedor]: e.target.value }))}
                   className="w-36 bg-bg border border-card_border rounded-lg px-3 py-1.5 text-text_main text-sm text-right focus:outline-none focus:border-accent"
