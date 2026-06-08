@@ -44,7 +44,7 @@ function StatCard({ label, sub, value, count = false, color, small = false }) {
         padding: small ? '10px 14px' : '14px 16px',
       }}
     >
-      <div style={{ fontSize: 9, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 2 }}>
+      <div style={{ fontSize: 9, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 2 }}>
         {label}
       </div>
       {sub && (
@@ -53,7 +53,7 @@ function StatCard({ label, sub, value, count = false, color, small = false }) {
       <div style={{ fontSize: small ? 18 : 22, fontWeight: 700, color, lineHeight: 1.1 }}>
         {count
           ? (value ?? 0).toLocaleString('pt-BR')
-          : shortBrl(value ?? 0)
+          : brl(value ?? 0)
         }
       </div>
     </div>
@@ -256,13 +256,13 @@ export default function Dashboard({ refreshTrigger }) {
         {/* Col 1: Faturamento Bruto → Qtde Vendas */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <StatCard
-            label="Faturamento do Mês"
+            label="Faturamento Bruto"
             sub="Valor Bruto das Vendas (R$)"
             value={data?.kpi_faturamento_bruto}
             color="#3b82f6"
           />
           <StatCard
-            label="Qtde Vendas"
+            label="Quantidade de Vendas"
             value={data?.qtd_vendas_bruta}
             color="#475569"
             count
@@ -279,7 +279,7 @@ export default function Dashboard({ refreshTrigger }) {
             color="#f59e0b"
           />
           <StatCard
-            label="Qtde Devoluções"
+            label="Quantidade de Devoluções"
             value={data?.qtd_vendas_dev}
             color="#78716c"
             count
@@ -306,13 +306,13 @@ export default function Dashboard({ refreshTrigger }) {
         {/* Col 4: Faturamento Líquido → Custo Rep */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <StatCard
-            label="Faturamento do Mês"
+            label="Faturamento Líquido Mês"
             sub="Venda Líquida (R$)"
             value={data?.kpi_venda_liquida}
             color="#22c55e"
           />
           <StatCard
-            label="Custo Rep Líquida"
+            label="Custo de Reposição Líquida"
             value={data?.kpi_custo_rep}
             color="#a855f7"
             small
@@ -329,6 +329,7 @@ export default function Dashboard({ refreshTrigger }) {
           value={pct(pctMeta)}
           variant={pctMeta >= 100 ? 'success' : pctMeta >= 70 ? 'warning' : 'error'}
           topBorder="#3b82f6"
+          labelColor="#f1f5f9"
         />
         <KpiCard
           label="Meta do Dia"
@@ -337,18 +338,21 @@ export default function Dashboard({ refreshTrigger }) {
           sub={metaDiaria > 0 ? `${brl(fatHoje)} de ${brl(metaDiaria)}` : 'Meta não configurada'}
           subAbove
           topBorder="#f59e0b"
+          labelColor="#f1f5f9"
         />
         <KpiCard
           label="Ticket Médio"
           value={brl(data?.ticket_medio ?? 0)}
           variant="default"
           topBorder="#64748b"
+          labelColor="#f1f5f9"
         />
         <KpiCard
           label="Frete"
           value={brl(data?.kpi_frete ?? 0)}
           variant="default"
           topBorder="#64748b"
+          labelColor="#f1f5f9"
         />
       </div>
 
