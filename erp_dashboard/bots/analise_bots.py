@@ -309,6 +309,67 @@ class BotDashboard(BaseBot):
                         .head(8)[['CodItem', 'DescrItem', 'DescrMarca', 'quantidade', 'venda_liq_prod']]
                         .to_dict('records'))
 
+        # ── KPIs e top itens POR MARCA — para filtragem client-side (igual vendedor)
+        # KPIs de nível-item (vmVndItemDoc). Cancelados e Frete são de nível-documento
+        # (vwVndDoc / vmVndDoc) e NÃO existem por marca → ficam None ("—" no front).
+        kpis_por_marca: list = []
+        top_itens_por_marca: dict = {}
+
+        df_kpi_marca = db.new_conn_query(f"""
+            SELECT i.DescrMarca,
+                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.PrecoVndTotItem ELSE 0 END) AS venda_liq,
+                SUM(CASE WHEN i.CustoRepTotItem <  0 THEN i.PrecoVndTotItem ELSE 0 END) AS devolucoes,
+                SUM(CASE WHEN i.CustoRepTotItem >= 0 THEN i.CustoRepTotItem ELSE 0 END) AS custo_rep,
+                SUM(i.QtdItem)                                                          AS quantidade,
+                COUNT(DISTINCT CASE WHEN i.CustoRepTotItem >= 0 THEN i.NrDoc END)       AS qtd_vendas_bruta,
+                COUNT(DISTINCT CASE WHEN i.CustoRepTotItem <  0 THEN i.NrDoc END)       AS qtd_vendas_dev
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            WHERE i.DtVnd >= {_MES_INI} AND i.DtVnd < {_MES_FIM}
+              AND i.DescrMarca IS NOT NULL
+              AND i.CodPlanoVnd NOT IN ('004','012','025','027')
+            GROUP BY i.DescrMarca
+        """)
+        if not df_kpi_marca.empty:
+            for _, _r in df_kpi_marca.iterrows():
+                _vl = float(_r['venda_liq'] or 0); _dv = abs(float(_r['devolucoes'] or 0))
+                _cr = float(_r['custo_rep'] or 0)
+                _qb = int(_r['qtd_vendas_bruta'] or 0); _qd = int(_r['qtd_vendas_dev'] or 0)
+                kpis_por_marca.append({
+                    "DescrMarca": _r['DescrMarca'],
+                    "kpi_venda_liquida": _vl, "kpi_custo_rep": _cr,
+                    "kpi_devolucoes": _dv, "kpi_lucro_bruto": _vl - _cr,
+                    "kpi_faturamento_bruto": _vl + _dv,   # sem cancelados (n/d por marca)
+                    "qtd_vendas_bruta": _qb, "qtd_vendas_dev": _qd,
+                    "quantidade": float(_r['quantidade'] or 0),
+                    "ticket_medio": (_vl / _qb) if _qb > 0 else 0.0,
+                    "kpi_cancelados": None,   # n/d por marca
+                    "kpi_frete": None,        # n/d por marca
+                })
+
+        _marca_names = [m for m in df_marcas['DescrMarca'].tolist() if m] if not df_marcas.empty else []
+        if _marca_names:
+            _ph = ','.join('?' for _ in _marca_names)
+            df_itens_marca = db.new_conn_query(f"""
+                SELECT i.DescrMarca, i.CodItem,
+                    MAX(i.DescrItem)       AS DescrItem,
+                    SUM(i.QtdItem)         AS quantidade,
+                    SUM(i.PrecoVndTotItem) AS venda_liq_prod
+                FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+                WHERE i.DtVnd >= {_MES_INI} AND i.DtVnd < {_MES_FIM}
+                  AND i.DescrItem IS NOT NULL
+                  AND i.CodPlanoVnd NOT IN ('004','012','025','027')
+                  AND i.DescrMarca IN ({_ph})
+                GROUP BY i.DescrMarca, i.CodItem
+            """, _marca_names)
+            if not df_itens_marca.empty:
+                for _m, _grp in df_itens_marca.groupby('DescrMarca'):
+                    _recs = (_grp.sort_values('quantidade', ascending=False)
+                        .head(8)[['CodItem', 'DescrItem', 'quantidade', 'venda_liq_prod']]
+                        .to_dict('records'))
+                    for _rec in _recs:
+                        _rec['DescrMarca'] = _m
+                    top_itens_por_marca[_m] = _recs
+
         df_diario_vend = db.query(f"""
             SELECT
                 CONVERT(date, v.DtVnd) AS dia,
@@ -421,6 +482,8 @@ class BotDashboard(BaseBot):
             "top_itens_mes":                   df_top_itens.to_dict("records"),
             "kpis_por_vendedor":               kpis_por_vendedor,
             "top_itens_por_vendedor":          top_itens_por_vendedor,
+            "kpis_por_marca":                  kpis_por_marca,
+            "top_itens_por_marca":             top_itens_por_marca,
             "kpi_venda_liquida":               kpi_venda_liquida,
             "kpi_devolucoes":                  kpi_devolucoes,
             "kpi_cancelados":                  kpi_cancelados,

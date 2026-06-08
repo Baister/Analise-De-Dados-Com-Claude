@@ -52,9 +52,11 @@ function StatCard({ label, sub, value, count = false, color, small = false }) {
         <div style={{ fontSize: 9, color: '#334155', marginBottom: 5 }}>{sub}</div>
       )}
       <div style={{ fontSize: small ? 18 : 22, fontWeight: 700, color, lineHeight: 1.1 }}>
-        {count
-          ? (value ?? 0).toLocaleString('pt-BR')
-          : brl(value ?? 0)
+        {value == null
+          ? '—'
+          : count
+            ? value.toLocaleString('pt-BR')
+            : brl(value)
         }
       </div>
     </div>
@@ -78,19 +80,24 @@ export default function Dashboard({ refreshTrigger }) {
   const topVendedores = useMemo(() => data?.top_vendedores ?? [], [data]);
   const marcasMes     = useMemo(() => data?.marcas_mes ?? [],     [data]);
 
-  // KPI ativo: registro do vendedor (kpis_por_vendedor) qdo filtrado; senão escalares globais
+  // KPI ativo: registro do vendedor OU da marca qdo filtrado; senão escalares globais.
+  // (kpis_por_marca traz kpi_cancelados/kpi_frete = null → "—", pois são de nível-documento)
   const kpiAtivo = useMemo(() => {
     if (filtroVendedor) {
       return (data?.kpis_por_vendedor ?? []).find(v => v.Vendedor === filtroVendedor) ?? {};
     }
+    if (filtroMarca) {
+      return (data?.kpis_por_marca ?? []).find(m => m.DescrMarca === filtroMarca) ?? {};
+    }
     return data ?? {};
-  }, [data, filtroVendedor]);
+  }, [data, filtroVendedor, filtroMarca]);
 
-  // Top itens: por vendedor (dict) qdo filtrado; senão global
+  // Top itens: por vendedor / por marca (dict) qdo filtrado; senão global
   const topItens = useMemo(() => {
     if (filtroVendedor) return (data?.top_itens_por_vendedor?.[filtroVendedor] ?? []).slice(0, 8);
+    if (filtroMarca)    return (data?.top_itens_por_marca?.[filtroMarca] ?? []).slice(0, 8);
     return (data?.top_itens_mes ?? []).slice(0, 8);
-  }, [data, filtroVendedor]);
+  }, [data, filtroVendedor, filtroMarca]);
 
   const fatDiario = useMemo(() => {
     if (!data) return [];
@@ -335,7 +342,7 @@ export default function Dashboard({ refreshTrigger }) {
         />
         <KpiCard
           label="Frete"
-          value={brl(kpiAtivo.kpi_frete ?? 0)}
+          value={kpiAtivo.kpi_frete == null ? '—' : brl(kpiAtivo.kpi_frete)}
           variant="default"
           topBorder="#64748b"
           labelColor="#f1f5f9"
@@ -365,7 +372,7 @@ export default function Dashboard({ refreshTrigger }) {
 
         <div style={{ background: '#1e293b', borderRadius: 8, padding: 16 }}>
           <p style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 12 }}>
-            {filtroVendedor ? `Vendedor — ${nomeVend}` : 'Top Vendedores'}
+            {filtroVendedor ? `Vendedor — ${nomeVend}` : filtroMarca ? `Vendedores — ${filtroMarca}` : 'Top Vendedores'}
           </p>
           <BarChart
             data={topVendedoresFiltrados}
@@ -410,7 +417,7 @@ export default function Dashboard({ refreshTrigger }) {
 
         <div style={{ background: '#1e293b', borderRadius: 8, padding: 16 }}>
           <p style={{ fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: 12 }}>
-            Top Itens Mais Vendidos (un.)
+            {filtroVendedor ? `Top Itens — ${nomeVend}` : filtroMarca ? `Top Itens — ${filtroMarca}` : 'Top Itens Mais Vendidos (un.)'}
           </p>
           <BarChart
             data={topItens}
