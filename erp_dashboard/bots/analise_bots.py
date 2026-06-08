@@ -336,7 +336,7 @@ class BotDashboard(BaseBot):
             "qtd_documentos":                  _safe_int(df_kpi, "qtd_documentos"),
             "qtd_devolucoes":                  _safe_int(df_kpi, "qtd_devolucoes"),
             "clientes_ativos":                 _safe_int(df_kpi, "clientes_ativos"),
-            "ticket_medio":                    _safe_float(df_kpi, "ticket_medio"),
+            "ticket_medio":                    (kpi_venda_liquida / kpi_qtd_vendas_bruta) if kpi_qtd_vendas_bruta > 0 else 0.0,
             "margem_bruta":                    margem_bruta,
             "pct_meta":                        pct,
             "meta_mensal":                     meta,
@@ -360,13 +360,14 @@ class BotDashboard(BaseBot):
         }
 
     def analisar_filtrado(self, filtros: dict) -> dict:
+        cod = filtros.get("cod_vend")
         parts  = [f"v.DtVnd >= {_MES_INI}", f"v.DtVnd < {_MES_FIM}",
                   "d.Cancelado = ''", "d.Fat = 1"]
         params: list = []
 
-        if filtros.get("vendedor"):
-            parts.append("v.Vendedor LIKE ?")
-            params.append(f"%{filtros['vendedor'][:100]}%")
+        if cod:
+            parts.append("v.CodVend = ?")
+            params.append(cod)
         if filtros.get("marca"):
             parts.append("EXISTS (SELECT 1 FROM Blue.dbo.vmVndItemDoc ii WITH (NOLOCK)"
                          " WHERE ii.NrDoc=v.NrDoc AND ii.NSUDoc=v.NSUDoc AND ii.DescrMarca LIKE ?)")
@@ -394,12 +395,9 @@ class BotDashboard(BaseBot):
         if filtros.get("marca"):
             marca_parts.append("i.DescrMarca LIKE ?")
             marca_params.append(f"%{filtros['marca'][:100]}%")
-        if filtros.get("vendedor"):
-            marca_parts.append(
-                "EXISTS (SELECT 1 FROM Blue.dbo.vmVndDoc vv WITH (NOLOCK)"
-                " WHERE vv.NrDoc=i.NrDoc AND vv.NSUDoc=i.NSUDoc AND vv.Vendedor LIKE ?)"
-            )
-            marca_params.append(f"%{filtros['vendedor'][:100]}%")
+        if cod:
+            marca_parts.append("i.CodVend = ?")
+            marca_params.append(cod)
 
         df_marcas = db.query(f"""
             SELECT TOP 8 i.DescrMarca,
@@ -432,12 +430,9 @@ class BotDashboard(BaseBot):
             diario_params: list = []
             diario_parts.append("i.DescrMarca LIKE ?")
             diario_params.append(f"%{filtros['marca'][:100]}%")
-            if filtros.get("vendedor"):
-                diario_parts.append(
-                    "EXISTS (SELECT 1 FROM Blue.dbo.vmVndDoc vv WITH (NOLOCK)"
-                    " WHERE vv.NrDoc=i.NrDoc AND vv.NSUDoc=i.NSUDoc AND vv.Vendedor LIKE ?)"
-                )
-                diario_params.append(f"%{filtros['vendedor'][:100]}%")
+            if cod:
+                diario_parts.append("i.CodVend = ?")
+                diario_params.append(cod)
             df_diario = db.query(f"""
                 SELECT dia, faturamento FROM (
                     SELECT TOP 30 CONVERT(date, i.DtVnd) AS dia,
@@ -454,17 +449,17 @@ class BotDashboard(BaseBot):
                     FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
                     INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc=d.NrDoc AND v.NSUDoc=d.NSUDoc
                     WHERE v.DtVnd >= DATEADD(day, -30, GETDATE()) AND d.Cancelado = '' AND d.Fat = 1
-                      {_EXCLUIR_PLANO} {("AND v.Vendedor LIKE ?" if filtros.get('vendedor') else '')}
+                      {_EXCLUIR_PLANO} {("AND v.CodVend = ?" if cod else '')}
                     GROUP BY CONVERT(date, v.DtVnd) ORDER BY dia DESC
                 ) _sub ORDER BY dia
-            """, ([f"%{filtros['vendedor'][:100]}%"] if filtros.get("vendedor") else None))
+            """, ([cod] if cod else None))
 
         # ── Novos KPIs filtrados ──────────────────────────────────────
         vnd_parts  = [f"v.DtVnd >= {_MES_INI}", f"v.DtVnd < {_MES_FIM}"]
         vnd_params: list = []
-        if filtros.get("vendedor"):
-            vnd_parts.append("v.Vendedor LIKE ?")
-            vnd_params.append(f"%{filtros['vendedor'][:100]}%")
+        if cod:
+            vnd_parts.append("v.CodVend = ?")
+            vnd_params.append(cod)
 
         where_vnd = " AND ".join(vnd_parts)
 
@@ -483,9 +478,9 @@ class BotDashboard(BaseBot):
         dev_parts  = [f"d.DtVnd >= {_MES_INI}", f"d.DtVnd < {_MES_FIM}",
                       "d.CodPlanoVnd NOT IN ('004','012','025','027')"]
         dev_params: list = []
-        if filtros.get("vendedor"):
-            dev_parts.append("d.Vendedor LIKE ?")
-            dev_params.append(f"%{filtros['vendedor'][:100]}%")
+        if cod:
+            dev_parts.append("d.CodVend = ?")
+            dev_params.append(cod)
 
         df_dev_f = db.new_conn_query(f"""
             SELECT SUM(d.ValTotItem) AS devolucoes_total
@@ -493,26 +488,28 @@ class BotDashboard(BaseBot):
             WHERE {" AND ".join(dev_parts)}
         """, dev_params if dev_params else None)
 
+        canc_parts  = [f"d.DataEmissao >= {_MES_INI}", f"d.DataEmissao < {_MES_FIM}",
+                       "d.TipoMovimento = '1.5-Documentos Cancelados'",
+                       "d.CodPlanoVnd NOT IN ('004','012','025','027')"]
+        canc_params: list = []
+        if cod:
+            canc_parts.append("d.CodFuncVnd = ?")
+            canc_params.append(cod)
+
         df_canc_f = db.new_conn_query(f"""
             SELECT SUM(d.ValTotalNFVnd) AS cancelados_total
             FROM Blue.dbo.vwVndDoc d WITH (NOLOCK)
-            WHERE d.DataEmissao >= {_MES_INI}
-              AND d.DataEmissao <  {_MES_FIM}
-              AND d.TipoMovimento = '1.5-Documentos Cancelados'
-              AND d.CodPlanoVnd NOT IN ('004','012','025','027')
-        """)
+            WHERE {" AND ".join(canc_parts)}
+        """, canc_params if canc_params else None)
 
-        # Top itens filtrados por vendedor (usando EXISTS pois vmVndItemDoc tem CodVend, não Vendedor)
+        # Top itens filtrados por vendedor — vmVndItemDoc tem CodVend direto
         top_itens_parts = [f"i.DtVnd >= {_MES_INI}", f"i.DtVnd < {_MES_FIM}",
                            "i.DescrItem IS NOT NULL",
                            "i.CodPlanoVnd NOT IN ('004','012','025','027')"]
         top_itens_params: list = []
-        if filtros.get("vendedor"):
-            top_itens_parts.append(
-                "EXISTS (SELECT 1 FROM Blue.dbo.vmVndDoc vv WITH (NOLOCK)"
-                " WHERE vv.NrDoc=i.NrDoc AND vv.NSUDoc=i.NSUDoc AND vv.Vendedor LIKE ?)"
-            )
-            top_itens_params.append(f"%{filtros['vendedor'][:100]}%")
+        if cod:
+            top_itens_parts.append("i.CodVend = ?")
+            top_itens_params.append(cod)
 
         df_top_itens_f = db.new_conn_query(f"""
             SELECT TOP 10
@@ -551,7 +548,7 @@ class BotDashboard(BaseBot):
             "qtd_documentos":     _safe_int(df_kpi, "qtd_documentos"),
             "qtd_devolucoes":     _safe_int(df_kpi, "qtd_devolucoes"),
             "clientes_ativos":    _safe_int(df_kpi, "clientes_ativos"),
-            "ticket_medio":       _safe_float(df_kpi, "ticket_medio"),
+            "ticket_medio":       (kpi_venda_liquida_f / kpi_qtd_vendas_bruta_f) if kpi_qtd_vendas_bruta_f > 0 else 0.0,
             "pct_meta":           pct,
             "meta_mensal":        meta,
             "top_vendedores":     df_vend.to_dict("records"),

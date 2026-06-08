@@ -416,6 +416,7 @@ def dados_cliente_comportamento(
 def dados_filtrado(
     bot_name: str,
     vendedor:        Optional[str] = Query(default=None),
+    cod_vend:        Optional[str] = Query(default=None),
     marca:           Optional[str] = Query(default=None),
     periodo:         Optional[str] = Query(default=None),
     dt_de:           Optional[str] = Query(default=None),
@@ -432,6 +433,7 @@ def dados_filtrado(
 
     filtros = {}
     if vendedor:        filtros["vendedor"]        = vendedor
+    if cod_vend:        filtros["cod_vend"]        = cod_vend
     if marca:           filtros["marca"]           = marca
     if periodo:         filtros["periodo"]         = periodo
     if dt_de:           filtros["dt_de"]           = dt_de

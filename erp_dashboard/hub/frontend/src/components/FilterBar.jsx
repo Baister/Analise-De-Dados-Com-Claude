@@ -19,11 +19,15 @@ export default function FilterBar({ filters, values, onChange }) {
               onChange={e => onChange({ ...values, [f.key]: e.target.value })}
               className="bg-bg border border-card_border rounded px-2 py-1.5 text-text_main text-xs focus:outline-none focus:border-accent min-w-[130px]"
             >
-              {(f.options || ['todos']).map(opt => (
-                <option key={opt} value={opt}>
-                  {opt === 'todos' ? 'Todos' : opt}
-                </option>
-              ))}
+              {(f.options || ['todos']).map(opt => {
+                const val = typeof opt === 'object' ? opt.value : opt;
+                const lbl = typeof opt === 'object' ? opt.label : opt;
+                return (
+                  <option key={val} value={val}>
+                    {val === 'todos' ? 'Todos' : lbl}
+                  </option>
+                );
+              })}
             </select>
           )}
 
