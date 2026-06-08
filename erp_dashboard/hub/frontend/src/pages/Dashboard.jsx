@@ -177,6 +177,13 @@ export default function Dashboard({ refreshTrigger }) {
   // pctMeta: venda líquida do KPI ativo (vendedor ou global) ÷ meta (individual ou empresa)
   const pctMeta = metaVal > 0 ? ((kpiAtivo.kpi_venda_liquida ?? 0) / metaVal) * 100 : 0;
 
+  // Margem Bruta = Lucro Bruto / Faturamento Líquido (reflete vendedor/marca via kpiAtivo)
+  const margemBruta = (kpiAtivo.kpi_venda_liquida ?? 0) > 0
+    ? ((kpiAtivo.kpi_lucro_bruto ?? 0) / kpiAtivo.kpi_venda_liquida) * 100
+    : 0;
+  // Faixas: >=30 verde | 25–29,99 amarelo | <25 (inclui 20–24,99) vermelho
+  const margemCor = margemBruta >= 30 ? '#22c55e' : margemBruta >= 25 ? '#f59e0b' : '#ef4444';
+
   function handleFilterChange(newFilters) {
     const newVend  = newFilters.Vendedor   !== 'todos' ? (newFilters.Vendedor   ?? null) : null;
     const newMarca = newFilters.DescrMarca !== 'todos' ? (newFilters.DescrMarca ?? null) : null;
@@ -314,7 +321,7 @@ export default function Dashboard({ refreshTrigger }) {
 
       {/* ── Performance ─────────────────────────────────────────────── */}
       <SectionLabel>Performance</SectionLabel>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 10 }}>
         <KpiCard
           label="% da Meta"
           value={pct(pctMeta)}
@@ -331,6 +338,14 @@ export default function Dashboard({ refreshTrigger }) {
           sub={metaDiaria > 0 ? `${brl(fatHoje)} de ${brl(metaDiaria)}` : 'Meta não configurada'}
           subAbove
           topBorder="#f59e0b"
+          labelColor="#f1f5f9"
+        />
+        <KpiCard
+          label="Margem Bruta"
+          value={pct(margemBruta)}
+          valueColor={margemCor}
+          gradient={`${margemCor}33`}
+          topBorder={margemCor}
           labelColor="#f1f5f9"
         />
         <KpiCard

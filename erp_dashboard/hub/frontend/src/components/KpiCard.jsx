@@ -5,15 +5,19 @@ const COLORS = {
   error:   '#da3633',
 };
 
-export default function KpiCard({ label, value, sub, variant = 'default', subAbove = false, topBorder, labelColor }) {
+export default function KpiCard({ label, value, sub, variant = 'default', subAbove = false, topBorder, labelColor, valueColor, gradient }) {
+  const cardStyle = {};
+  if (topBorder) cardStyle.borderTop = `2px solid ${topBorder}`;
+  // gradient: cor (com alpha) sobreposta como background-image sobre o bg-card → tom gradiente
+  if (gradient) cardStyle.backgroundImage = `linear-gradient(135deg, ${gradient}, transparent 60%)`;
   return (
     <div
       className="bg-card border border-card_border rounded-lg p-4 flex-1 min-w-[120px]"
-      style={topBorder ? { borderTop: `2px solid ${topBorder}` } : {}}
+      style={cardStyle}
     >
       <p className="text-subtext text-[10px] uppercase tracking-wider mb-1.5" style={labelColor ? { color: labelColor } : undefined}>{label}</p>
       {subAbove && sub && <p className="text-subtext text-[10px] mb-1">{sub}</p>}
-      <p className="text-xl font-bold" style={{ color: COLORS[variant] }}>{value ?? '—'}</p>
+      <p className="text-xl font-bold" style={{ color: valueColor ?? COLORS[variant] }}>{value ?? '—'}</p>
       {!subAbove && sub && <p className="text-subtext text-[10px] mt-1">{sub}</p>}
     </div>
   );
