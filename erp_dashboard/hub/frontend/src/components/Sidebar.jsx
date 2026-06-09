@@ -92,7 +92,7 @@ export default function Sidebar({ routes, activePage, onNavigate }) {
   return (
     <aside className="w-[200px] bg-sidebar border-r border-card_border flex flex-col flex-shrink-0 overflow-hidden">
       <div className="px-4 py-5 border-b border-card_border">
-        <h1 className="text-text_main font-bold text-sm leading-tight">ERP Analytics</h1>
+        <h1 className="text-text_main font-bold text-sm leading-tight">G2 Analytics</h1>
         <p className="text-subtext text-[10px] mt-0.5">Dashboard</p>
       </div>
 

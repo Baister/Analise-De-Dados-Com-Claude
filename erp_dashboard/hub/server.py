@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
 
 
 # ── App ───────────────────────────────────────────────────────────────
-app = FastAPI(title="ERP Dashboard API", version="2.0", lifespan=lifespan)
+app = FastAPI(title="G2 Analytics API", version="2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -124,7 +124,7 @@ def login(req: AuthRequest):
 # ── Root ──────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"status": "ok", "api": "ERP Dashboard v2.0", "docs": "/docs"}
+    return {"status": "ok", "api": "G2 Analytics v2.0", "docs": "/docs"}
 
 
 @app.get("/config")
@@ -522,9 +522,9 @@ def run_hub(port: int | None = None):
     net_url   = f"http://{local_ip}:{_port}"
     app_url   = f"{local_url}/app"
 
-    logger.info("ERP Hub iniciado → %s", net_url)
+    logger.info("G2 Analytics Hub iniciado → %s", net_url)
     print(f"\n{'=' * 52}")
-    print(f"  ERP Dashboard rodando!")
+    print(f"  G2 Analytics rodando!")
     print(f"  Local:  {app_url}")
     print(f"  Rede:   {net_url}/app")
     print(f"  API:    {local_url}/docs")

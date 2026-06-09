@@ -32,7 +32,7 @@ export default function LoginScreen({ onLogin }) {
         onSubmit={handleSubmit}
         className="bg-card border border-card_border rounded-xl p-8 w-80 shadow-xl"
       >
-        <h1 className="text-text_main text-xl font-bold mb-1">ERP Analytics</h1>
+        <h1 className="text-text_main text-xl font-bold mb-1">G2 Analytics</h1>
         <p className="text-subtext text-xs mb-6">Dashboard Web</p>
 
         <label className="block text-subtext text-[10px] uppercase tracking-wider mb-1.5">
