@@ -8,7 +8,7 @@ import BarChart from '../charts/BarChart';
 import PieChart from '../charts/PieChart';
 import { brl, pct, shortBrl } from '../utils/format';
 import { getUniqueValues, agregaPorDia } from '../utils/filters';
-import { countBusinessDaysSP } from '../utils/businessDays';
+import { remainingBusinessDaysSP } from '../utils/businessDays';
 
 function ProcessingScreen({ label }) {
   return (
@@ -145,11 +145,17 @@ export default function Dashboard({ refreshTrigger }) {
       : (meta ?? data?.meta_mensal ?? 0);
   }, [filtroVendedor, mIndiv, metas, meta, data]);
 
+  // Realizado no mês (na mesma base da meta: venda líquida do KPI ativo)
+  const realizadoMes = kpiAtivo.kpi_venda_liquida ?? 0;
+
+  // Meta do Dia DINÂMICA: o que FALTA para a meta ÷ dias úteis RESTANTES
+  // (igual ao "Progresso Diário" da aba Vendas). Cai conforme você vende.
   const metaDiaria = useMemo(() => {
     if (!metaVal) return 0;
+    const restante = Math.max(metaVal - realizadoMes, 0);
     const now = new Date();
-    return metaVal / countBusinessDaysSP(now.getFullYear(), now.getMonth() + 1);
-  }, [metaVal]);
+    return restante / Math.max(remainingBusinessDaysSP(now.getFullYear(), now.getMonth() + 1), 1);
+  }, [metaVal, realizadoMes]);
 
   const fatHoje = useMemo(() => {
     const hoje = new Date().toISOString().slice(0, 10);
@@ -157,9 +163,12 @@ export default function Dashboard({ refreshTrigger }) {
     return entry?.faturamento ?? 0;
   }, [fatDiario]);
 
-  const pctMetaDiaria = useMemo(() =>
-    metaDiaria > 0 ? (fatHoje / metaDiaria) * 100 : 0,
-  [fatHoje, metaDiaria]);
+  // Meta mensal já batida → 100%; senão, faturado hoje ÷ meta diária ajustada
+  const metaMensalBatida = metaVal > 0 && realizadoMes >= metaVal;
+  const pctMetaDiaria = useMemo(() => {
+    if (metaMensalBatida) return 100;
+    return metaDiaria > 0 ? (fatHoje / metaDiaria) * 100 : 0;
+  }, [metaMensalBatida, fatHoje, metaDiaria]);
 
   const marcasFiltradas = useMemo(() => {
     if (filtroVendedor && hasMarcasVend) {
@@ -339,7 +348,11 @@ export default function Dashboard({ refreshTrigger }) {
           label="Meta do Dia"
           value={pct(pctMetaDiaria)}
           variant={pctMetaDiaria >= 100 ? 'success' : pctMetaDiaria >= 70 ? 'warning' : 'error'}
-          sub={metaDiaria > 0 ? `${brl(fatHoje)} de ${brl(metaDiaria)}` : 'Meta não configurada'}
+          sub={
+            metaVal <= 0 ? 'Meta não configurada'
+            : metaMensalBatida ? 'Meta do mês atingida 🎉'
+            : `${brl(fatHoje)} de ${brl(metaDiaria)} hoje`
+          }
           subAbove
           topBorder="#f59e0b"
           labelColor="#f1f5f9"
