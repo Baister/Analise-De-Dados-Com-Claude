@@ -351,7 +351,7 @@ export default function Dashboard({ refreshTrigger }) {
           sub={
             metaVal <= 0 ? 'Meta não configurada'
             : metaMensalBatida ? 'Meta do mês atingida 🎉'
-            : `${brl(fatHoje)} de ${brl(metaDiaria)} hoje`
+            : `${brl(fatHoje)} de ${brl(metaDiaria)}`
           }
           subAbove
           topBorder="#f59e0b"
