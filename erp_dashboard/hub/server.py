@@ -1,11 +1,14 @@
 # hub/server.py
 import asyncio
+import concurrent.futures as _cf
 import json
 import logging
 import pathlib
 import re as _re
 import secrets
 import time
+
+import pandas as _pd
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -237,77 +240,230 @@ def status_route(token: str = Depends(verify_token)):
     return {"bots": {name: info for name, info in st.items() if _allowed(name)}}
 
 
+# ── Cliente 360º ──────────────────────────────────────────────────────
+# Dois modos: ?busca=<termo>  → lista de clientes candidatos (TbCli)
+#             ?cod=<CodRedCt> → perfil completo (7 consultas em paralelo)
+def _cliente_buscar(termo: str) -> dict:
+    from core.database import db
+    t = f"%{termo[:80]}%"
+    df = db.new_conn_query("""
+        SELECT TOP 20 RTRIM(c.CodRedCt) AS cod,
+            RTRIM(c.NomeFantCli) AS nome,
+            RTRIM(c.RzsCli)      AS razao,
+            RTRIM(c.CGCCPFCli)   AS doc,
+            RTRIM(c.UFMunicFat)  AS uf,
+            c.DtUltCmpCli        AS ultima_compra
+        FROM Blue.dbo.TbCli c WITH (NOLOCK)
+        WHERE c.NomeFantCli LIKE ? OR c.RzsCli LIKE ?
+           OR c.CodRedCt LIKE ? OR c.CGCCPFCli LIKE ?
+        ORDER BY c.DtUltCmpCli DESC
+    """, [t, t, t, t])
+    res = []
+    if df is not None and not df.empty:
+        for _, r in df.iterrows():
+            u = r["ultima_compra"]
+            res.append({
+                "cod": r["cod"], "nome": r["nome"] or r["razao"] or "—",
+                "razao": r["razao"], "doc": r["doc"], "uf": r["uf"],
+                "ultima_compra": u.strftime("%Y-%m-%d") if u is not None and not _pd.isna(u) else None,
+            })
+    return {"modo": "busca", "resultados": res}
+
+
+def _cliente_perfil(cod: str) -> dict:
+    from core.database import db
+    cod = cod.strip()[:20]
+
+    sqls = {
+        # Cadastro + limite de crédito (TbCli ⋈ TbLimCredCli)
+        "cad": ("""
+            SELECT RTRIM(c.CodRedCt) AS cod, RTRIM(c.NomeFantCli) AS nome,
+                RTRIM(c.RzsCli) AS razao, RTRIM(c.CGCCPFCli) AS doc,
+                RTRIM(c.Fone1Cli) AS fone, RTRIM(c.UFMunicFat) AS uf,
+                c.dthrcadcli AS cadastro, c.DtUltCmpCli AS ultima_compra_cad,
+                RTRIM(c.CodPlanoVndPadrao) AS plano_padrao,
+                l.ValLimCred1 AS limite_credito
+            FROM Blue.dbo.TbCli c WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbLimCredCli l WITH (NOLOCK)
+                ON l.CodLimCredCli = c.CodLimCredCli
+            WHERE c.CodRedCt = ?
+        """, [cod]),
+        # Documentos 24m (1 pull → KPIs, evolução, vendedores, últimas compras)
+        "docs": ("""
+            SELECT v.NrDoc, MAX(v.DtVnd) AS DtVnd, MAX(v.Vendedor) AS Vendedor,
+                SUM(v.ValVndTotal) AS valor,
+                MIN(v.CustoRepTotal) AS custo_min
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            WHERE v.CodCli = ? AND v.DtVnd >= DATEADD(month, -24, GETDATE())
+            GROUP BY v.NrDoc
+        """, [cod]),
+        "primeira": ("SELECT MIN(v.DtVnd) AS primeira FROM Blue.dbo.vmVndDoc v WITH (NOLOCK) WHERE v.CodCli = ?", [cod]),
+        "produtos": ("""
+            SELECT TOP 10 i.CodItem, MAX(i.DescrItem) AS produto, MAX(i.DescrMarca) AS marca,
+                SUM(i.QtdItem) AS qtd, SUM(i.PrecoVndTotItem) AS valor
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            WHERE i.CodCli = ? AND i.DtVnd >= DATEADD(month, -12, GETDATE())
+            GROUP BY i.CodItem ORDER BY valor DESC
+        """, [cod]),
+        "marcas": ("""
+            SELECT TOP 8 ISNULL(RTRIM(i.DescrMarca), '—') AS marca,
+                SUM(i.PrecoVndTotItem) AS valor, SUM(i.QtdItem) AS qtd
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            WHERE i.CodCli = ? AND i.DtVnd >= DATEADD(month, -12, GETDATE())
+            GROUP BY i.DescrMarca ORDER BY valor DESC
+        """, [cod]),
+        # Títulos em aberto (vmCtRecDetalhe é a visão de abertos do Financeiro)
+        "titulos": ("""
+            SELECT TOP 20 RTRIM(Documento) AS documento, DtVencimento,
+                Valor, RTRIM(Receita) AS receita
+            FROM Blue.dbo.vmCtRecDetalhe WITH (NOLOCK)
+            WHERE CodCli = ? ORDER BY DtVencimento
+        """, [cod]),
+        "orcamentos": ("""
+            SELECT TOP 10 RTRIM(o.NrOrcPedVnd) AS nr, o.DtOrcPedVnd AS data,
+                DATEDIFF(day, o.DtOrcPedVnd, GETDATE()) AS dias_aberto,
+                o.ValTotalOrcPedVnd AS valor
+            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+            WHERE o.OrcPedVnd = 1
+              AND TRY_CAST(o.CodRedCtRecOrcPedVnd AS INT) = TRY_CAST(? AS INT)
+              AND o.DtOrcPedVnd >= DATEADD(day, -180, GETDATE())
+            ORDER BY o.DtOrcPedVnd DESC
+        """, [cod]),
+    }
+    res: dict = {}
+    with _cf.ThreadPoolExecutor(max_workers=4) as pool:
+        futs = {pool.submit(db.new_conn_query, sql, prm): k for k, (sql, prm) in sqls.items()}
+        for f in _cf.as_completed(futs):
+            k = futs[f]
+            try:
+                res[k] = f.result()
+            except Exception as e:
+                logger.error("[Cliente360] %s: %s", k, e)
+                res[k] = None
+
+    df_cad = res.get("cad")
+    if df_cad is None or df_cad.empty:
+        return {"modo": "perfil", "erro": f"Cliente '{cod}' não encontrado"}
+    c = df_cad.iloc[0]
+
+    def _dt(v, fmt="%Y-%m-%d"):
+        return v.strftime(fmt) if v is not None and not _pd.isna(v) else None
+
+    cadastro = {
+        "cod": c["cod"], "nome": c["nome"] or c["razao"] or "—", "razao": c["razao"],
+        "doc": c["doc"], "fone": c["fone"], "uf": c["uf"],
+        "cadastro": _dt(c["cadastro"]), "plano_padrao": c["plano_padrao"],
+        "limite_credito": float(c["limite_credito"]) if c["limite_credito"] is not None and not _pd.isna(c["limite_credito"]) else None,
+    }
+
+    # ── Derivados dos documentos (24 meses) ───────────────────────
+    kpis, evolucao, vendedores, ultimas = {}, [], [], []
+    df_d = res.get("docs")
+    if df_d is not None and not df_d.empty:
+        df_d = df_d.copy()
+        df_d["DtVnd"] = _pd.to_datetime(df_d["DtVnd"], errors="coerce")
+        for col in ("valor", "custo_min"):
+            df_d[col] = _pd.to_numeric(df_d[col], errors="coerce").fillna(0.0)
+        df_d["is_dev"] = df_d["custo_min"] < 0
+        hoje = _pd.Timestamp.now()
+        d12 = df_d[df_d["DtVnd"] >= hoje - _pd.DateOffset(months=12)]
+        vnd12 = d12[~d12["is_dev"]]
+        ult = df_d["DtVnd"].max()
+        n12 = int(len(vnd12))
+        # frequência média: dias entre compras nos últimos 12m
+        freq = None
+        if n12 >= 2:
+            dias_span = (vnd12["DtVnd"].max() - vnd12["DtVnd"].min()).days
+            freq = round(dias_span / (n12 - 1)) if dias_span > 0 else None
+        kpis = {
+            "comprado_12m":    float(vnd12["valor"].sum()),
+            "pedidos_12m":     n12,
+            "ticket_medio":    round(float(vnd12["valor"].sum()) / n12, 2) if n12 else 0.0,
+            "devolucoes_12m":  float(d12[d12["is_dev"]]["valor"].sum()),
+            "ultima_compra":   _dt(ult),
+            "dias_sem_compra": int((hoje - ult).days) if ult is not None and not _pd.isna(ult) else None,
+            "freq_media_dias": freq,
+        }
+        df_m = (df_d[df_d["DtVnd"] >= hoje - _pd.DateOffset(months=12)]
+                .assign(mes=lambda x: x["DtVnd"].dt.strftime("%m/%Y"),
+                        _ord=lambda x: x["DtVnd"].dt.strftime("%Y%m"))
+                .groupby(["_ord", "mes"], as_index=False)
+                .agg(valor=("valor", "sum"), pedidos=("NrDoc", "nunique"))
+                .sort_values("_ord"))
+        evolucao = [{"mes": r["mes"], "valor": round(float(r["valor"]), 2),
+                     "pedidos": int(r["pedidos"])} for _, r in df_m.iterrows()]
+        df_v = (df_d.groupby("Vendedor", as_index=False)
+                .agg(pedidos=("NrDoc", "nunique"), valor=("valor", "sum"),
+                     primeira=("DtVnd", "min"), ultima=("DtVnd", "max"))
+                .sort_values("ultima", ascending=False))
+        vendedores = [{"vendedor": (r["Vendedor"] or "—").strip(),
+                       "pedidos": int(r["pedidos"]), "valor": round(float(r["valor"]), 2),
+                       "primeira": _dt(r["primeira"]), "ultima": _dt(r["ultima"]),
+                       "atual": i == 0}
+                      for i, (_, r) in enumerate(df_v.iterrows())]
+        ultimas = [{"nr_doc": str(r["NrDoc"]).strip(), "data": _dt(r["DtVnd"]),
+                    "vendedor": (r["Vendedor"] or "—").strip(),
+                    "valor": round(float(r["valor"]), 2),
+                    "devolucao": bool(r["is_dev"])}
+                   for _, r in df_d.sort_values("DtVnd", ascending=False).head(15).iterrows()]
+
+    df_p = res.get("primeira")
+    primeira = _dt(df_p["primeira"].iloc[0]) if df_p is not None and not df_p.empty else None
+
+    def _recs(key, conv):
+        df = res.get(key)
+        return [conv(r) for _, r in df.iterrows()] if df is not None and not df.empty else []
+
+    top_produtos = _recs("produtos", lambda r: {
+        "cod_item": str(r["CodItem"]).strip(), "produto": (r["produto"] or "—").strip(),
+        "marca": (r["marca"] or "—").strip(), "qtd": float(r["qtd"] or 0),
+        "valor": float(r["valor"] or 0)})
+    top_marcas = _recs("marcas", lambda r: {
+        "marca": r["marca"], "valor": float(r["valor"] or 0), "qtd": float(r["qtd"] or 0)})
+    orcamentos = _recs("orcamentos", lambda r: {
+        "nr": r["nr"], "data": _dt(r["data"]), "dias_aberto": int(r["dias_aberto"] or 0),
+        "valor": float(r["valor"] or 0)})
+
+    titulos_lista = _recs("titulos", lambda r: {
+        "documento": r["documento"], "vencimento": _dt(r["DtVencimento"]),
+        "valor": float(r["Valor"] or 0), "receita": r["receita"]})
+    _hoje_str = datetime.now().strftime("%Y-%m-%d")
+    tit_venc = [t for t in titulos_lista if t["vencimento"] and t["vencimento"] < _hoje_str]
+    titulos = {
+        "qtd": len(titulos_lista),
+        "valor": round(sum(t["valor"] for t in titulos_lista), 2),
+        "vencidos_qtd": len(tit_venc),
+        "vencidos_valor": round(sum(t["valor"] for t in tit_venc), 2),
+        "lista": titulos_lista,
+    }
+
+    return {
+        "modo": "perfil", "cadastro": cadastro, "kpis": kpis,
+        "cliente_desde": primeira, "evolucao": evolucao,
+        "top_produtos": top_produtos, "top_marcas": top_marcas,
+        "vendedores": vendedores, "ultimas_compras": ultimas,
+        "orcamentos_abertos": orcamentos, "titulos": titulos,
+    }
+
+
 # NOTE: /dados/cliente must be registered BEFORE /dados/{bot_name} to avoid
 # FastAPI matching "cliente" as the bot_name path parameter.
 @app.get("/dados/cliente")
 def dados_cliente(
-    de: Optional[str] = Query(default=None),
-    ate: Optional[str] = Query(default=None),
-    vendedor: Optional[str] = Query(default=None),
-    cliente: Optional[str] = Query(default=None),
-    marca: Optional[str] = Query(default=None),
-    produto: Optional[str] = Query(default=None),
+    busca: Optional[str] = Query(default=None),
+    cod: Optional[str] = Query(default=None),
     token: str = Depends(verify_token),
 ):
     _require_tab(token, "cliente")
-
-    def _valid_date(s: str) -> bool:
-        return bool(s and _re.fullmatch(r'\d{4}-\d{2}-\d{2}', s))
-
     try:
-        from core.database import db
-        conds  = ["1=1"]
-        params = []
-        if de      and _valid_date(de):    conds.append("d.DtVnd >= ?"); params.append(de)
-        if ate     and _valid_date(ate):   conds.append("d.DtVnd <= ?"); params.append(ate)
-        if vendedor:  conds.append("d.NomeVend LIKE ?"); params.append(f"%{vendedor[:100]}%")
-        if cliente:   conds.append("d.NomeCli  LIKE ?"); params.append(f"%{cliente[:100]}%")
-        if marca:     conds.append("i.DescrMarca LIKE ?"); params.append(f"%{marca[:100]}%")
-        if produto:   conds.append("i.DescrItem  LIKE ?"); params.append(f"%{produto[:100]}%")
-        where = " AND ".join(conds)
-
-        df = db.query(f"""
-            SELECT TOP 500
-                d.NomeCli      AS cliente,
-                i.DescrItem    AS produto,
-                i.DescrMarca   AS marca,
-                d.NomeVend     AS vendedor,
-                SUM(i.QtdFat)  AS quantidade,
-                SUM(i.TotalFat) AS faturamento
-            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vmVndDoc d WITH (NOLOCK)
-                ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
-            WHERE {where}
-            GROUP BY d.NomeCli, i.DescrItem, i.DescrMarca, d.NomeVend
-            ORDER BY faturamento DESC
-        """, params if params else None)
-
-        if df is None or df.empty:
-            return {"kpis": {}, "top_clientes": [], "por_marca": [], "detalhe": []}
-
-        top_clientes = (
-            df.groupby("cliente")["faturamento"].sum()
-            .reset_index().sort_values("faturamento", ascending=False)
-            .head(10).to_dict("records")
-        )
-        por_marca = (
-            df.groupby("marca")["faturamento"].sum()
-            .reset_index().sort_values("faturamento", ascending=False)
-            .head(10).to_dict("records")
-        )
-        total_fat = float(df["faturamento"].sum())
-        n_clientes = int(df["cliente"].nunique())
-        return {
-            "kpis": {
-                "total_clientes":     n_clientes,
-                "faturamento":        total_fat,
-                "produtos_distintos": int(df["produto"].nunique()),
-                "ticket_medio":       round(total_fat / max(n_clientes, 1), 2),
-            },
-            "top_clientes": top_clientes,
-            "por_marca":    por_marca,
-            "detalhe":      df.to_dict("records"),
-        }
+        if cod:
+            payload = _cliente_perfil(cod)
+        elif busca and busca.strip():
+            payload = _cliente_buscar(busca.strip())
+        else:
+            payload = {"modo": "vazio"}
+        return Response(content=json.dumps(_clean_nan(payload), default=str),
+                        media_type="application/json")
     except Exception as e:
         logger.error("dados_cliente erro: %s", e)
         raise HTTPException(status_code=503, detail=str(e))
