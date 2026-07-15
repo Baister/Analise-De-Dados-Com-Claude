@@ -99,9 +99,12 @@ class DatabaseManager:
                 self._conn = None
                 return pd.DataFrame()
 
-    def new_conn_query(self, sql: str, params=None) -> pd.DataFrame:
+    def new_conn_query(self, sql: str, params=None, max_rows: "int | None" = None) -> pd.DataFrame:
         """Execute query on a fresh independent connection — safe for parallel calls.
-        Does NOT use _lock, so it never blocks on the shared-connection query queue."""
+        Does NOT use _lock, so it never blocks on the shared-connection query queue.
+        max_rows: teto de linhas retornadas (None → ALERTAS['query_max_rows']).
+        Use valores maiores apenas em queries agregadas por item (ex.: base do
+        estoque), onde truncar em 5000 distorceria totais."""
         try:
             conn = pyodbc.connect(self._build_conn_str(), autocommit=True)
             conn.timeout = 90
@@ -117,9 +120,11 @@ class DatabaseManager:
                 cols = [desc[0] for desc in cursor.description]
                 rows = cursor.fetchall()
                 df = pd.DataFrame([list(r) for r in rows], columns=cols)
-                max_rows = ALERTAS.get("query_max_rows", 5000)
-                if len(df) > max_rows:
-                    df = df.head(max_rows)
+                cap = max_rows if max_rows is not None else ALERTAS.get("query_max_rows", 5000)
+                if len(df) > cap:
+                    logger.warning("new_conn_query: resultado truncado em %d linhas (havia %d)",
+                                   cap, len(df))
+                    df = df.head(cap)
                 return df
             finally:
                 conn.close()

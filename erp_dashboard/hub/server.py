@@ -11,7 +11,7 @@ from datetime import datetime
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -476,6 +476,17 @@ def dados_filtrado(
 @app.get("/dados/{bot_name}")
 def dados(bot_name: str, token: str = Depends(verify_token)):
     _require_tab(token, bot_name)
+
+    # Caminho quente: servir da MEMÓRIA do hub (sem disco, sem lock de cache).
+    # Serializa EXATAMENTE como o cache (_clean_nan + default=str), então os
+    # dados apresentados são idênticos ao caminho antigo — só que sem SQLite.
+    if _manager is not None:
+        bot = _manager.bots.get(bot_name)
+        if bot is not None and bot.resultado:
+            payload = json.dumps(_clean_nan(bot.resultado), default=str)
+            return Response(content=payload, media_type="application/json")
+
+    # Fallback: modo cliente (sem manager) ou bot ainda sem resultado → cache em disco.
     try:
         data = _cache.load(bot_name)
     except Exception as e:
