@@ -138,7 +138,8 @@ export default function Imposto({ refreshTrigger }) {
         <div>
           <h1 className="text-text_main text-lg font-bold leading-tight">Imposto</h1>
           <p className="text-subtext text-[11px]">
-            ICMS, CFOP e tributação — notas fiscais de venda · mês {mesRef}
+            ICMS, CFOP e tributação — <b>somente NFs faturadas</b> (Faturado=True) e não
+            canceladas · mês {mesRef}
             {data?.ultimo_update && <> · Atualizado {data.ultimo_update}</>}
           </p>
         </div>

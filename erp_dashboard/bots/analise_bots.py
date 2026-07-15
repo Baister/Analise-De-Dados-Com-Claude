@@ -1993,6 +1993,7 @@ class BotImposto(BaseBot):
                     SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.FreteNFVnd                 ELSE 0 END) AS frete
                 FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
                 WHERE n.DtEmisNFVnd >= {ini} AND n.DtEmisNFVnd < {fim}
+                  AND n.Fat = 1
             """
 
         sql_kpi_atual = _sql_kpis(_MES_INI, _MES_FIM)
@@ -2007,6 +2008,7 @@ class BotImposto(BaseBot):
             FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
             WHERE n.DtEmisNFVnd >= {_MES_INI} AND n.DtEmisNFVnd < {_MES_FIM}
               AND n.DataHoraCanc IS NULL
+              AND n.Fat = 1
             GROUP BY DAY(n.DtEmisNFVnd)
             ORDER BY dia
         """
@@ -2024,6 +2026,7 @@ class BotImposto(BaseBot):
             WHERE n.DtEmisNFVnd >= DATEADD(month, DATEDIFF(month, 0, GETDATE()) - 11, 0)
               AND n.DtEmisNFVnd <  {_MES_FIM}
               AND n.DataHoraCanc IS NULL
+              AND n.Fat = 1
             GROUP BY YEAR(n.DtEmisNFVnd), MONTH(n.DtEmisNFVnd)
             ORDER BY ano, mes
         """
@@ -2045,6 +2048,7 @@ class BotImposto(BaseBot):
             LEFT JOIN Blue.dbo.TbCodFiscOper f WITH (NOLOCK) ON f.CodFisc = n.CodFisc
             WHERE n.DtEmisNFVnd >= {_MES_INI} AND n.DtEmisNFVnd < {_MES_FIM}
               AND n.DataHoraCanc IS NULL
+              AND n.Fat = 1
             GROUP BY n.CodFisc
             ORDER BY total DESC
         """
@@ -2058,6 +2062,7 @@ class BotImposto(BaseBot):
             WHERE n.DtEmisNFVnd >= DATEADD(month, DATEDIFF(month, 0, GETDATE()) - 5, 0)
               AND n.DtEmisNFVnd <  {_MES_FIM}
               AND n.DataHoraCanc IS NULL
+              AND n.Fat = 1
             GROUP BY YEAR(n.DtEmisNFVnd), MONTH(n.DtEmisNFVnd), RTRIM(n.CodFisc)
             ORDER BY ano, mes
         """
@@ -2075,6 +2080,7 @@ class BotImposto(BaseBot):
             LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON c.CodRedCt = n.CodRedCliNFVnd
             WHERE n.DtEmisNFVnd >= {_MES_INI} AND n.DtEmisNFVnd < {_MES_FIM}
               AND n.DataHoraCanc IS NULL
+              AND n.Fat = 1
             ORDER BY n.DebICMSNFVnd DESC
         """
 
