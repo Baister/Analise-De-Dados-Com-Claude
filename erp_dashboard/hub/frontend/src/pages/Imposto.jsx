@@ -146,7 +146,7 @@ export default function Imposto({ refreshTrigger }) {
 
       {/* ── KPIs (com comparativo do mês anterior) ── */}
       <SectionLabel first>Resumo do Mês — comparado ao mês anterior</SectionLabel>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
         <KpiCard label="ICMS do Mês (R$)" value={brl(kpis.icms)}
           sub={deltaSub(deltas.icms) ?? 'Débito de ICMS'}
           topBorder={AZUL} gradient="rgba(31,111,235,0.10)" />
@@ -155,24 +155,32 @@ export default function Imposto({ refreshTrigger }) {
           topBorder={VERDE} valueColor="#4ade80" />
         <KpiCard label="Projeção ICMS (mês)" value={brl(projecaoIcms)}
           sub="ritmo atual × dias úteis do mês" topBorder={ROXO} valueColor="#c084fc" />
+        <KpiCard label="Base de Cálculo (R$)" value={brl(kpis.base_icms)}
+          sub="operações com débito próprio" topBorder="#8b949e" />
         <KpiCard label="Faturamento (NFs)" value={brl(kpis.faturamento)}
           sub={deltaSub(deltas.faturamento) ?? 'NFs de venda'} topBorder={AZUL} />
-        <KpiCard label="Base de Cálculo (R$)" value={brl(kpis.base_icms)}
-          sub="Base ICMS" topBorder="#8b949e" />
         <KpiCard label="Qtde NFs" value={fmtInt(kpis.qtd_nf)}
           sub={`${fmtInt(kpis.nfs_canceladas)} canceladas`}
           variant={kpis.nfs_canceladas > 0 ? 'warning' : 'default'} topBorder={AZUL} />
-        <KpiCard label="ICMS-ST (R$)" value={brl(kpis.icms_st)}
-          sub="Substituição Tributária" topBorder={ROXO} />
-        <KpiCard label="IPI (R$)" value={brl(kpis.ipi)}
-          sub="Débito de IPI" topBorder={AMBAR} />
+        <KpiCard label="Operações c/ ST — Outras (R$)" value={brl(kpis.outras)}
+          sub="ICMS-ST retido na origem · CFOP 5405/6404" topBorder={ROXO} valueColor="#c084fc" />
+        <KpiCard label="Isentas/Não Trib. ICMS (R$)" value={brl(kpis.isentas)}
+          sub="operações sem incidência" topBorder="#8b949e" />
+        <KpiCard label="ICMS-ST Destacado (R$)" value={brl(kpis.icms_st)}
+          sub="destacado em NF própria" topBorder={ROXO} />
+        <KpiCard label="IPI Debitado (R$)" value={brl(kpis.ipi)}
+          sub="débito próprio de IPI" topBorder={AMBAR} />
+        <KpiCard label="Isentas/Outras IPI (R$)" value={brl((kpis.isentas_ipi ?? 0) + (kpis.outras_ipi ?? 0))}
+          sub="livro IPI — revenda não destaca" topBorder={AMBAR} />
+        <KpiCard label="Frete (NFs) (R$)" value={brl(kpis.frete)}
+          sub="frete destacado nas NFs" topBorder={VERDE} />
       </div>
-      {(kpis.icms_st === 0 && kpis.ipi === 0) && (
-        <p className="text-subtext text-[10px] mt-1.5 opacity-70">
-          IPI e ICMS-ST aparecem zerados: operação de revenda/comércio (ST retido a montante —
-          refletido via CFOP 5405/6404). Os campos ficam prontos caso passem a ter valor.
-        </p>
-      )}
+      <p className="text-subtext text-[10px] mt-1.5 opacity-70">
+        Estrutura do livro de ICMS: <b>Base de Cálculo</b> (com débito próprio) + <b>Isentas/Não
+        Tributadas</b> + <b>Outras</b>. A coluna "Outras" concentra as operações com <b>ICMS-ST já
+        retido na origem</b> (CFOP 5405/6404) — por isso "ICMS-ST Destacado" e "IPI Debitado" ficam
+        R$0 na revenda: o imposto dessas operações não é debitado nesta empresa.
+      </p>
 
       {/* ── ICMS diário ── */}
       <SectionLabel>ICMS no Mês — dia a dia</SectionLabel>
@@ -268,11 +276,16 @@ export default function Imposto({ refreshTrigger }) {
             { key: 'base_icms', label: 'Base ICMS', align: 'right', render: brl },
             { key: 'icms', label: 'ICMS', align: 'right', render: brl },
             { key: 'pct_icms', label: '% ICMS', align: 'right', render: v => pct(v) },
-            { key: 'icms_st', label: 'ICMS-ST', align: 'right', render: brl },
-            { key: 'ipi', label: 'IPI', align: 'right', render: brl },
+            { key: 'isentas', label: 'Isentas', align: 'right', render: brl },
+            { key: 'outras', label: 'Outras (ST)', align: 'right',
+              render: v => <span style={{ color: v > 0 ? '#c084fc' : undefined }}>{brl(v)}</span> },
           ]}
           rows={porCfop}
         />
+        <p className="text-subtext text-[10px] mt-2 opacity-70">
+          "Outras (ST)" = valor das operações sem débito próprio de ICMS (substituição tributária
+          retida na origem). Nos CFOPs 5405/6404 é onde a operação de ST aparece no livro fiscal.
+        </p>
       </Card>
 
       {/* ── Maiores NFs ── */}

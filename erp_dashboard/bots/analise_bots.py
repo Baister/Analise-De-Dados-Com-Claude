@@ -1958,8 +1958,15 @@ class BotImposto(BaseBot):
             "icms_st":          _safe_float(df, 'icms_st'),
             "base_ipi":         _safe_float(df, 'base_ipi'),
             "ipi":              _safe_float(df, 'ipi'),
+            # Livro ICMS: Valor Contábil ≈ Base + Isentas + OUTRAS.
+            # "Outras" = parcela SEM débito próprio → concentra as operações com
+            # ICMS-ST retido na origem (CFOP 5405/6404) — confirmado nos dados.
             "isentas":          _safe_float(df, 'isentas'),
             "outras":           _safe_float(df, 'outras'),
+            # Livro IPI (revenda não destaca IPI → valor cai em Isentas/Outras IPI)
+            "isentas_ipi":      _safe_float(df, 'isentas_ipi'),
+            "outras_ipi":       _safe_float(df, 'outras_ipi'),
+            "frete":            _safe_float(df, 'frete'),
             "aliquota_efetiva": (icms / base_icms * 100) if base_icms else 0.0,
         }
 
@@ -1980,7 +1987,10 @@ class BotImposto(BaseBot):
                     SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.BaseIPINFVnd               ELSE 0 END) AS base_ipi,
                     SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.DebIPINFVnd                ELSE 0 END) AS ipi,
                     SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.IsentasNaoTribICMSNFVnd    ELSE 0 END) AS isentas,
-                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.OutrasOperICMSNFVnd        ELSE 0 END) AS outras
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.OutrasOperICMSNFVnd        ELSE 0 END) AS outras,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.IsentasNaoTribIPINFVnd     ELSE 0 END) AS isentas_ipi,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.OutrasOperIPINFVnd         ELSE 0 END) AS outras_ipi,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.FreteNFVnd                 ELSE 0 END) AS frete
                 FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
                 WHERE n.DtEmisNFVnd >= {ini} AND n.DtEmisNFVnd < {fim}
             """
@@ -2028,7 +2038,9 @@ class BotImposto(BaseBot):
                 SUM(n.BaseICMSNFVnd)         AS base_icms,
                 SUM(n.DebICMSNFVnd)          AS icms,
                 SUM(n.ValICMSSubstTribNFVnd) AS icms_st,
-                SUM(n.DebIPINFVnd)           AS ipi
+                SUM(n.DebIPINFVnd)           AS ipi,
+                SUM(n.IsentasNaoTribICMSNFVnd) AS isentas,
+                SUM(n.OutrasOperICMSNFVnd)     AS outras
             FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
             LEFT JOIN Blue.dbo.TbCodFiscOper f WITH (NOLOCK) ON f.CodFisc = n.CodFisc
             WHERE n.DtEmisNFVnd >= {_MES_INI} AND n.DtEmisNFVnd < {_MES_FIM}
@@ -2185,6 +2197,8 @@ class BotImposto(BaseBot):
                     "icms":      ic,
                     "icms_st":   float(r['icms_st'] or 0),
                     "ipi":       float(r['ipi'] or 0),
+                    "isentas":   float(r['isentas'] or 0),
+                    "outras":    float(r['outras'] or 0),   # oper. c/ ST retido na origem
                     "pct_icms":  round(ic / tot_icms_mes * 100, 1) if tot_icms_mes else 0.0,
                     "uf":        uf,
                     "st":        cod in self._CFOP_ST,
