@@ -12,11 +12,12 @@ const TOOLTIP = {
 
 // showValue=true → legenda mostra "Nome · R$XXk"
 // formatter: função de formatação do valor (padrão: brl)
+// colors: paleta customizada (padrão: COLORS) — ex. cores semânticas A/B/C
 // tooltipContext: { title, formula, extra: [{key, label, formatter}] }
 //   → ativa tooltip customizado com contexto de como o valor foi calculado
 export default function PieChart({
   data, nameKey, valueKey, showValue = false, formatter, height = 200, highlightKey = null,
-  tooltipContext = null,
+  tooltipContext = null, colors = COLORS,
 }) {
   if (!data?.length) {
     return (
@@ -82,7 +83,7 @@ export default function PieChart({
               {data.map((entry, i) => (
                 <Cell
                   key={i}
-                  fill={COLORS[i % COLORS.length]}
+                  fill={colors[i % colors.length]}
                   fillOpacity={highlightKey ? (entry[nameKey] === highlightKey ? 1 : 0.35) : 1}
                 />
               ))}
@@ -104,7 +105,7 @@ export default function PieChart({
           <li key={i} className="flex items-start gap-1.5">
             <span
               className="w-2 h-2 rounded-sm flex-shrink-0 inline-block mt-[1px]"
-              style={{ background: COLORS[i % COLORS.length] }}
+              style={{ background: colors[i % colors.length] }}
             />
             <span className="text-subtext leading-snug">
               {entry[nameKey]}

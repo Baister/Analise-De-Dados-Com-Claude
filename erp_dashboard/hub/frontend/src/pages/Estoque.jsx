@@ -1,39 +1,67 @@
 import { useState, useMemo } from 'react';
-import { useFilteredDados } from '../hooks/useApi';
+import { useDados } from '../hooks/useApi';
 import KpiCard from '../components/KpiCard';
 import DataTable from '../components/DataTable';
+import LineChart from '../charts/LineChart';
+import BarChart from '../charts/BarChart';
+import PieChart from '../charts/PieChart';
 import { brl, shortBrl, fmtDate } from '../utils/format';
-import { getUniqueValues } from '../utils/filters';
-import { classifyABC } from '../utils/estoque';
 
 const PAGE_SIZE = 50;
 
-// ─── Column definitions ────────────────────────────────────────────────────
-const CURVA_AB_COLS = [
-  { key: 'CodItem',         label: 'Código' },
-  { key: 'DescrItem',       label: 'Descrição' },
-  { key: 'DescrMarca',      label: 'Marca' },
-  { key: 'QtdEstq',         label: 'Qtd',       render: v => String(v ?? 0) },
-  { key: 'giro90d',         label: 'Giro 90d',  render: v => (v ?? 0).toFixed(2) },
-  { key: 'val_vendido_90d', label: 'Vlr 90d',   render: v => shortBrl(v) },
-];
+const fmtInt = v => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 0 }));
+const fmtQtd = v => (v == null ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
+// Venda líquida = vendas − devoluções; negativo significa mais devolução que venda
+const fmtLiq = v => {
+  if (v == null) return '—';
+  const n = Number(v);
+  return n < 0 ? `${fmtInt(n)} (devolveu mais que vendeu)` : fmtInt(n);
+};
 
-const CURVA_C_COLS = [
-  { key: 'CodItem',    label: 'Código' },
-  { key: 'DescrItem',  label: 'Descrição' },
-  { key: 'DescrMarca', label: 'Marca' },
-  { key: 'QtdEstq',    label: 'Qtd',          render: v => String(v ?? 0) },
-  { key: 'giro90d',    label: 'Giro 90d',     render: v => (v ?? 0).toFixed(2) },
-  { key: 'DtUltVnd',   label: 'Última venda', render: v => (v ? fmtDate(v) : '—') },
-];
+// Cores semânticas fixas (paleta da casa)
+const ABC_COLOR = { A: '#238636', B: '#d29922', C: '#da3633' };
 
-const ZERADOS_COLS = [
-  { key: 'CodItem',    label: 'Código' },
-  { key: 'DescrItem',  label: 'Descrição' },
-  { key: 'DescrMarca', label: 'Marca' },
-  { key: 'VlrEstq',    label: 'Vlr Estq',    render: v => brl(v) },
-  { key: 'DtUltVnd',   label: 'Zerado desde', render: v => (v ? fmtDate(v) : '—') },
-];
+function SectionLabel({ children, first }) {
+  return (
+    <p
+      className="text-[10px] text-subtext uppercase mb-[7px]"
+      style={{ letterSpacing: '1px', marginTop: first ? 0 : 18 }}
+    >
+      {children}
+    </p>
+  );
+}
+
+function Card({ children, className = '' }) {
+  return (
+    <div className={`bg-card border border-card_border rounded-lg p-4 ${className}`}>
+      {children}
+    </div>
+  );
+}
+
+function CardTitle({ children, right }) {
+  return (
+    <div className="flex items-center justify-between mb-3">
+      <p className="text-[11px] text-subtext uppercase" style={{ letterSpacing: '0.8px' }}>
+        {children}
+      </p>
+      {right && <span className="text-[9px] text-subtext opacity-70">{right}</span>}
+    </div>
+  );
+}
+
+function AbcBadge({ classe }) {
+  const c = ABC_COLOR[classe] || '#8b949e';
+  return (
+    <span
+      className="inline-block font-bold rounded"
+      style={{ fontSize: 9, padding: '1px 7px', background: `${c}26`, color: c }}
+    >
+      {classe ?? '—'}
+    </span>
+  );
+}
 
 function fmtTempo(dias) {
   if (dias == null) return 'Nunca vendido';
@@ -46,332 +74,394 @@ function fmtTempo(dias) {
   return `${dias} dias`;
 }
 
-const SEM_GIRO_COLS = [
-  { key: 'CodItem',        label: 'Código' },
+// ─── Situações da tabela detalhada (cada uma com sua fonte e colunas) ───────
+const SITUACOES = [
+  { key: 'todos',  label: 'Todos os itens',    color: '#1f6feb' },
+  { key: 'min',    label: 'Abaixo do Mínimo',  color: '#d29922' },
+  { key: 'parado', label: 'Parado 90+ dias',   color: '#a371f7' },
+  { key: 'zerado', label: 'Sem Estoque',       color: '#da3633' },
+];
+
+const COLS_TODOS = [
+  { key: 'CodItem',        label: 'Cód.' },
   { key: 'DescrItem',      label: 'Descrição' },
   { key: 'DescrMarca',     label: 'Marca' },
-  { key: 'QtdEstq',        label: 'Qtd',          render: v => String(v ?? 0) },
-  { key: 'VlrEstq',        label: 'Vlr Estq',     render: v => shortBrl(v) },
+  { key: 'QtdEstq',        label: 'Estq',      align: 'right', render: fmtQtd },
+  { key: 'QtdEstqDisp',    label: 'Disp',      align: 'right', render: fmtQtd },
+  { key: 'EstqMin',        label: 'Mín',       align: 'right', render: v => (v > 0 ? fmtQtd(v) : '—') },
+  { key: 'giro90d',        label: 'Giro 90d',  align: 'right', render: v => (v ?? 0).toFixed(2) },
+  { key: 'cobertura_dias', label: 'Cobert.',   align: 'right', render: v => (v == null ? '—' : `${v}d`) },
+  { key: 'abc',            label: 'ABC',       render: v => <AbcBadge classe={v} /> },
+  { key: 'VlrEstq',        label: 'Valor',     align: 'right', render: brl },
+];
+
+const COLS_MIN = [
+  { key: 'CodItem',     label: 'Cód.' },
+  { key: 'DescrItem',   label: 'Descrição' },
+  { key: 'DescrMarca',  label: 'Marca' },
+  { key: 'QtdEstqDisp', label: 'Disponível', align: 'right', render: fmtQtd },
+  { key: 'EstqMin',     label: 'Mínimo',     align: 'right', render: fmtQtd },
+  { key: 'falta',       label: 'Falta',      align: 'right',
+    render: v => <span style={{ color: '#d29922', fontWeight: 700 }}>{fmtQtd(v)}</span> },
+];
+
+const COLS_PARADO = [
+  { key: 'CodItem',        label: 'Cód.' },
+  { key: 'DescrItem',      label: 'Descrição' },
+  { key: 'DescrMarca',     label: 'Marca' },
+  { key: 'QtdEstq',        label: 'Qtd',          align: 'right', render: fmtQtd },
+  { key: 'VlrEstq',        label: 'Vlr Imobilizado', align: 'right', render: brl },
   { key: 'DiasSemVndReal', label: 'Tempo parado', render: v => fmtTempo(v) },
   { key: 'DtUltVnd',       label: 'Última venda', render: v => (v ? fmtDate(v) : '—') },
 ];
 
-// Maps activeCurva key → column definition for DataTable
-const COLS_ABC = { A: CURVA_AB_COLS, B: CURVA_AB_COLS, C: CURVA_C_COLS, Z: ZERADOS_COLS, S: SEM_GIRO_COLS };
-
-// ─── ABC curve metadata ────────────────────────────────────────────────────
-const CURVAS = [
-  { key: 'A', label: 'Curva A',  sub: 'Alto Giro',  color: '#238636' },
-  { key: 'B', label: 'Curva B',  sub: 'Giro Médio', color: '#d29922' },
-  { key: 'C', label: 'Curva C',  sub: 'Baixo Giro', color: '#da3633' },
-  { key: 'Z', label: 'Zerados',  sub: 'Estq = 0',   color: '#8b949e' },
-  { key: 'S', label: 'Sem Giro', sub: '90+ dias',   color: '#a371f7' },
+const COLS_ZERADO = [
+  { key: 'CodItem',    label: 'Cód.' },
+  { key: 'DescrItem',  label: 'Descrição' },
+  { key: 'DescrMarca', label: 'Marca' },
+  { key: 'VlrEstq',    label: 'Vlr Estq',     align: 'right', render: brl },
+  { key: 'DtUltVnd',   label: 'Última venda', render: v => (v ? fmtDate(v) : '—') },
 ];
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
-function textFilter(list, query) {
-  const q = query.trim().toLowerCase();
-  if (!q) return list;
-  return list.filter(r =>
-    (r.DescrItem ?? '').toLowerCase().includes(q) ||
-    String(r.CodItem ?? '').toLowerCase().includes(q)
-  );
-}
+const COLS_MAP = { todos: COLS_TODOS, min: COLS_MIN, parado: COLS_PARADO, zerado: COLS_ZERADO };
 
-// ─── Component ────────────────────────────────────────────────────────────
+const truncate = (s, n = 14) => {
+  const t = String(s ?? '');
+  return t.length > n ? t.slice(0, n - 1) + '…' : t;
+};
+
+// ─── Componente ─────────────────────────────────────────────────────────────
 export default function Estoque({ refreshTrigger }) {
-  const [filters, setFilters]         = useState({});
-  const [activeCurva, setActiveCurva] = useState('A');
-  const [textoBusca, setTextoBusca]   = useState('');
-  const [curvaPage, setCurvaPage]     = useState(0);
+  const { data, loading, error, isEmpty } = useDados('estoque', refreshTrigger);
 
-  const apiFilters = useMemo(() => {
-    const f = {};
-    if (filters.DescrMarca && filters.DescrMarca !== 'todos') f.marca = filters.DescrMarca;
-    return f;
-  }, [filters]);
+  const [situacao, setSituacao]     = useState('todos');
+  const [textoBusca, setTextoBusca] = useState('');
+  const [marcaSel, setMarcaSel]     = useState('todas');
+  const [abcSel, setAbcSel]         = useState('todas');
+  const [page, setPage]             = useState(0);
 
-  const { data, loading, error, isEmpty } = useFilteredDados('estoque', apiFilters, refreshTrigger);
+  const tabela       = data?.tabela_detalhada ?? [];
+  const abcResumo    = data?.abc_resumo ?? [];
+  const porMarca     = data?.por_marca ?? [];
+  const entradasSaidas = data?.entradas_saidas ?? [];
+  const evolucao     = data?.evolucao_estimada ?? [];
+  const evolucaoReal = data?.evolucao_real ?? [];
+  const giroTop      = data?.giro_top ?? [];
+  const giroBottom   = data?.giro_bottom ?? [];
 
-  // ── Raw data from API ──
-  const porMarca     = data?.por_marca     ?? [];
-  const giroBruto    = data?.giro_bruto    ?? [];
-  const zeradosLista = data?.zerados_lista ?? [];
-  const semGiroLista = data?.sem_giro_lista ?? [];
-  const totalItens   = data?.total_itens   ?? 0;
-  const itensZerados = data?.itens_zerados ?? 0;
-  const itensSemGiro = data?.itens_sem_giro ?? 0;
-
-  // Marca options for the header dropdown
-  const marcasOpts = getUniqueValues(porMarca, 'DescrMarca');
-
-  // ── ABC classification (runs once per giroBruto change) ──
-  const classified = useMemo(() => {
-    const c = classifyABC(giroBruto);
-    return c.map(r => ({ ...r, giro90d: r.qtd_vendida_90d / Math.max(r.QtdEstq ?? 1, 1) }));
-  }, [giroBruto]);
-
-  const curvaALista = useMemo(() => classified.filter(r => r.abc === 'A'), [classified]);
-  const curvaBLista = useMemo(() => classified.filter(r => r.abc === 'B'), [classified]);
-  const curvaCLista = useMemo(() => classified.filter(r => r.abc === 'C'), [classified]);
-
-  // Active curve rows + text filter applied
-  const curvaRows = useMemo(() => {
-    if (activeCurva === 'A') return curvaALista;
-    if (activeCurva === 'B') return curvaBLista;
-    if (activeCurva === 'C') return curvaCLista;
-    if (activeCurva === 'S') return semGiroLista;
-    return zeradosLista;
-  }, [activeCurva, curvaALista, curvaBLista, curvaCLista, zeradosLista, semGiroLista]);
-
-  const curvaRowsFiltrado = useMemo(
-    () => textFilter(curvaRows, textoBusca),
-    [curvaRows, textoBusca]
+  const marcasOpts = useMemo(
+    () => ['todas', ...porMarca.map(m => m.DescrMarca).filter(Boolean)],
+    [porMarca]
   );
 
-  // Pagination
-  const totalPages = Math.ceil(curvaRowsFiltrado.length / PAGE_SIZE);
-  const curvaRowsPage = useMemo(
-    () => curvaRowsFiltrado.slice(curvaPage * PAGE_SIZE, (curvaPage + 1) * PAGE_SIZE),
-    [curvaRowsFiltrado, curvaPage]
+  // Fonte de linhas conforme a situação selecionada
+  const fonteRows = useMemo(() => {
+    if (situacao === 'min')    return data?.abaixo_min_lista ?? [];
+    if (situacao === 'parado') return data?.parado_lista ?? [];
+    if (situacao === 'zerado') return data?.zerados_lista ?? [];
+    return tabela;
+  }, [situacao, data, tabela]);
+
+  // Filtros client-side: texto + marca (todas as situações) + classe ABC (só "todos")
+  const rowsFiltradas = useMemo(() => {
+    const q = textoBusca.trim().toLowerCase();
+    return fonteRows.filter(r => {
+      if (q && !(String(r.DescrItem ?? '').toLowerCase().includes(q) ||
+                 String(r.CodItem ?? '').toLowerCase().includes(q))) return false;
+      if (marcaSel !== 'todas' && r.DescrMarca !== marcaSel) return false;
+      if (situacao === 'todos' && abcSel !== 'todas' && r.abc !== abcSel) return false;
+      return true;
+    });
+  }, [fonteRows, textoBusca, marcaSel, abcSel, situacao]);
+
+  const totalPages = Math.max(Math.ceil(rowsFiltradas.length / PAGE_SIZE), 1);
+  const rowsPage = useMemo(
+    () => rowsFiltradas.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
+    [rowsFiltradas, page]
   );
 
-  // Count per curve key (for mini-card labels)
-  const curvaCounts = useMemo(() => ({
-    A: curvaALista.length,
-    B: curvaBLista.length,
-    C: curvaCLista.length,
-    Z: zeradosLista.length,
-    S: semGiroLista.length,
-  }), [curvaALista, curvaBLista, curvaCLista, zeradosLista, semGiroLista]);
+  // Dados dos gráficos
+  const abcPie = useMemo(
+    () => abcResumo.map(a => ({ ...a, label: `Classe ${a.classe}` })),
+    [abcResumo]
+  );
+  const marcaChart = useMemo(() => porMarca.slice(0, 10), [porMarca]);
+  // Nome curto no eixo Y (nome completo fica no tooltip via DescrItem)
+  const giroTopChart = useMemo(
+    () => giroTop.map(r => ({ ...r, DescrCurta: truncate(r.DescrItem, 18) })),
+    [giroTop]
+  );
+  const giroBottomChart = useMemo(
+    () => giroBottom.map(r => ({ ...r, DescrCurta: truncate(r.DescrItem, 18) })),
+    [giroBottom]
+  );
 
-  // True while giro_bruto hasn't arrived yet (analisar() is still running)
-  const loadingABC = !data || !('giro_bruto' in data);
-
-  // ── Helper to change curva and reset page + search ──
-  function selectCurva(key) {
-    setActiveCurva(key);
+  function selectSituacao(key) {
+    setSituacao(key);
+    setPage(0);
     setTextoBusca('');
-    setCurvaPage(0);
+    if (key !== 'todos') setAbcSel('todas');
   }
 
   // ── Early returns ──
-  if (loading && !data) {
-    return (
-      <div className="flex items-center justify-center h-64 text-subtext text-sm">
-        Carregando dados de estoque…
+  if (loading && !data) return (
+    <div className="flex items-center justify-center h-64 text-subtext text-sm">
+      Carregando dados de estoque…
+    </div>
+  );
+  if (error && !data) return (
+    <div className="flex items-center justify-center h-64 text-accent_red text-sm">
+      Erro ao carregar dados: {error}
+    </div>
+  );
+  if (isEmpty) return (
+    <div className="flex items-center justify-center h-64 text-subtext text-sm">
+      <div className="text-center space-y-1">
+        <p>Bot Estoque está processando dados…</p>
+        <p className="text-xs opacity-60">A página atualiza automaticamente quando concluir.</p>
       </div>
-    );
-  }
+    </div>
+  );
 
-  if (error && !data) {
-    return (
-      <div className="flex items-center justify-center h-64 text-accent_red text-sm">
-        Erro ao carregar dados: {error}
-      </div>
-    );
-  }
+  const situacaoAtiva = SITUACOES.find(s => s.key === situacao) ?? SITUACOES[0];
 
-  if (isEmpty) {
-    return (
-      <div className="flex items-center justify-center h-64 text-subtext text-sm">
-        <div className="text-center space-y-1">
-          <p>Bot Estoque está processando dados do banco…</p>
-          <p className="text-xs opacity-60">
-            O Estoque tem muitos dados e pode levar alguns minutos. A página atualiza automaticamente.
+  return (
+    <div className="p-4">
+
+      {/* ── Cabeçalho ── */}
+      <div className="flex items-end justify-between flex-wrap gap-2 mb-1">
+        <div>
+          <h1 className="text-text_main text-lg font-bold leading-tight">Estoque</h1>
+          <p className="text-subtext text-[11px]">
+            Visão geral, Curva ABC, giro e cobertura · {fmtInt(data?.skus)} SKUs
+            {data?.ultimo_update && <> · Atualizado {data.ultimo_update}</>}
           </p>
         </div>
       </div>
-    );
-  }
 
-  const curvaAtiva = CURVAS.find(c => c.key === activeCurva) ?? CURVAS[0];
-
-  return (
-    <div className="p-6">
-
-      {/* ── Header row ── */}
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-bold text-text_main">Estoque</h1>
-        <div className="flex items-center gap-3">
-          <select
-            value={filters.DescrMarca || 'todos'}
-            onChange={e => { setFilters({ ...filters, DescrMarca: e.target.value }); setTextoBusca(''); setActiveCurva('A'); setCurvaPage(0); }}
-            className="bg-card border border-card_border rounded-lg px-3 py-1.5 text-text_main text-xs focus:outline-none focus:border-accent"
-          >
-            {marcasOpts.map(opt => (
-              <option key={opt} value={opt}>
-                {opt === 'todos' ? 'Todas as marcas' : opt}
-              </option>
-            ))}
-          </select>
-          {data?.ultimo_update && (
-            <span className="text-subtext text-xs">Atualizado {data.ultimo_update}</span>
-          )}
-        </div>
+      {/* ── KPIs ── */}
+      <SectionLabel first>Visão Geral</SectionLabel>
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2.5">
+        <KpiCard label="Valor em Estoque" value={brl(data?.valor_total_estoque)}
+          sub="custo dos itens" topBorder="#1f6feb" gradient="rgba(31,111,235,0.10)" />
+        <KpiCard label="Qtd em Estoque" value={fmtInt(data?.qtd_total)}
+          sub="unidades armazenadas" topBorder="#8b949e" />
+        <KpiCard label="SKUs" value={fmtInt(data?.skus)}
+          sub={`${fmtInt(data?.skus_com_estoque)} com estoque`} topBorder="#1f6feb" />
+        <KpiCard label="Abaixo do Mínimo" value={String(data?.abaixo_min_qtd ?? 0)}
+          sub={`de ${data?.abaixo_min_total_config ?? 0} com mín. configurado`}
+          variant="warning" topBorder="#d29922" />
+        <KpiCard label="Sem Estoque" value={String(data?.itens_zerados ?? 0)}
+          sub="disponível ≤ 0" variant="error" topBorder="#da3633" />
+        <KpiCard label="Estoque Parado" value={String(data?.parado_qtd ?? 0)}
+          sub={`${brl(data?.parado_valor)} imobilizado`}
+          valueColor="#a371f7" topBorder="#a371f7" />
+        <KpiCard label="Cobertura Média" value={data?.cobertura_media_dias != null ? `${data.cobertura_media_dias} dias` : '—'}
+          sub="disponível ÷ demanda 90d" variant="success" topBorder="#238636" />
       </div>
 
-      {/* ── Two-column body ── */}
-      <div className="flex gap-3 items-start">
-
-        {/* ── Left column (35%) ── */}
-        <div className="w-[35%] flex flex-col gap-3">
-
-          {/* KPI 2×2 grid */}
-          <div className="grid grid-cols-2 gap-2">
-            <KpiCard
-              label="Total de Itens"
-              value={String(totalItens)}
-              topBorder="#1f6feb"
-            />
-            <KpiCard
-              label="Valor em Estoque"
-              value={shortBrl(data?.valor_total_estoque ?? 0)}
-              topBorder="#1f6feb"
-            />
-            <KpiCard
-              label="Itens Zerados"
-              value={String(itensZerados)}
-              topBorder="#da3633"
-              variant={itensZerados > 0 ? 'error' : 'default'}
-            />
-            <KpiCard
-              label="Sem Giro"
-              value={String(itensSemGiro)}
-              topBorder="#d29922"
-              variant={itensSemGiro > 0 ? 'warning' : 'default'}
-            />
-          </div>
-
-          {/* Brand ranking list */}
-          <div className="bg-card border border-card_border rounded-lg p-3">
-            <p className="text-[10px] font-semibold text-subtext uppercase tracking-wider mb-2">
-              Valor por Marca
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {porMarca.slice(0, 5).map((m, i) => (
-                <div
-                  key={m.DescrMarca}
-                  className="flex justify-between items-center px-2 py-1.5 bg-progress_bg rounded text-xs"
-                  style={{ borderLeft: `3px solid rgba(31,111,235,${(1 - i * 0.18).toFixed(2)})` }}
-                >
-                  <span className="text-text_main font-medium truncate">{m.DescrMarca}</span>
-                  <span className="text-subtext ml-2 shrink-0">{shortBrl(m.valor_estoque)}</span>
-                </div>
-              ))}
-              {porMarca.length > 5 && (
-                <div className="flex justify-between items-center px-2 py-1.5 text-xs">
-                  <span className="text-subtext">+ {porMarca.length - 5} marcas</span>
-                  <span className="text-subtext">
-                    {shortBrl(porMarca.slice(5).reduce((s, m) => s + (Number(m.valor_estoque) || 0), 0))}
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-
-        </div>
-
-        {/* ── Right column — ABC block ── */}
-        <div className="flex-1 bg-card border border-card_border rounded-lg p-4">
-
-          {/* Section header with divider */}
-          <div className="flex items-center gap-2 mb-3">
-            <span className="text-[10px] font-bold text-subtext uppercase tracking-widest">
-              Análise ABC
-            </span>
-            <div className="flex-1 h-px bg-card_border" />
-            <span className="text-[9px] text-subtext">últimos 90 dias</span>
-          </div>
-
-          {/* Mini-card selector — 5 colunas */}
-          <div className="grid grid-cols-5 gap-1.5 mb-3">
-            {CURVAS.map(c => {
-              const active = activeCurva === c.key;
-              // Sem Giro usa semGiroLista.length diretamente (disponível antes do giro_bruto)
-              const count = c.key === 'S'
-                ? semGiroLista.length
-                : (loadingABC ? null : curvaCounts[c.key]);
-              return (
-                <button
-                  key={c.key}
-                  onClick={() => selectCurva(c.key)}
-                  className="rounded-lg p-2 text-center transition-all"
-                  style={
-                    active
-                      ? { background: c.color, boxShadow: `0 0 0 2px ${c.color}66` }
-                      : { background: '#21262d', border: `1px solid ${c.color}` }
-                  }
-                >
-                  <div className="text-base font-bold leading-tight" style={{ color: active ? '#fff' : c.color }}>
-                    {count === null ? '…' : count}
-                  </div>
-                  <div className="text-[9px] mt-0.5 truncate" style={{ color: active ? '#ffffff99' : '#8b949e' }}>
-                    {c.label}
-                  </div>
-                  <div className="text-[8px]" style={{ color: active ? '#ffffff77' : '#8b949e' }}>
-                    {c.sub}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Active curve label + text filter */}
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-xs font-semibold" style={{ color: curvaAtiva.color }}>
-              ▼ {curvaAtiva.label} — {curvaAtiva.sub}
-            </span>
-            <div className="flex-1" />
-            <div className="w-48">
-              <input
-                type="text"
-                placeholder="Filtrar por produto ou código..."
-                value={textoBusca}
-                onChange={e => { setTextoBusca(e.target.value); setCurvaPage(0); }}
-                className="w-full px-3 py-1.5 text-xs bg-card_border border border-card_border rounded-lg text-text_main placeholder-subtext focus:outline-none focus:border-blue-500"
-              />
-            </div>
-          </div>
-
-          {/* Detail table */}
-          {loadingABC && activeCurva !== 'S' && activeCurva !== 'Z'
-            ? <p className="text-xs text-subtext py-4">Carregando análise de giro…</p>
-            : <DataTable columns={COLS_ABC[activeCurva]} rows={curvaRowsPage} />
-          }
-
-          {/* Pagination controls */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-2 text-[10px] text-subtext">
-              <span>{curvaRowsFiltrado.length} itens · pág {curvaPage + 1}/{totalPages}</span>
-              <div className="flex items-center gap-1">
-                <button
-                  disabled={curvaPage === 0}
-                  onClick={() => setCurvaPage(0)}
-                  className="px-1.5 py-0.5 rounded bg-card_border disabled:opacity-30 hover:text-text_main"
-                >«</button>
-                <button
-                  disabled={curvaPage === 0}
-                  onClick={() => setCurvaPage(p => p - 1)}
-                  className="px-1.5 py-0.5 rounded bg-card_border disabled:opacity-30 hover:text-text_main"
-                >‹</button>
-                <button
-                  disabled={curvaPage >= totalPages - 1}
-                  onClick={() => setCurvaPage(p => p + 1)}
-                  className="px-1.5 py-0.5 rounded bg-card_border disabled:opacity-30 hover:text-text_main"
-                >›</button>
-                <button
-                  disabled={curvaPage >= totalPages - 1}
-                  onClick={() => setCurvaPage(totalPages - 1)}
-                  className="px-1.5 py-0.5 rounded bg-card_border disabled:opacity-30 hover:text-text_main"
-                >»</button>
+      {/* ── Curva ABC ── */}
+      <SectionLabel>Curva ABC — por valor vendido (90 dias)</SectionLabel>
+      <div className="grid gap-2.5" style={{ gridTemplateColumns: '1fr 1fr 1.4fr' }}>
+        <div className="flex flex-col gap-2.5">
+          {abcResumo.map(a => (
+            <div key={a.classe}
+              className="bg-card border border-card_border rounded-lg px-4 py-2.5 flex items-center gap-3"
+              style={{ borderLeft: `3px solid ${ABC_COLOR[a.classe]}` }}>
+              <span className="text-xl font-bold" style={{ color: ABC_COLOR[a.classe] }}>{a.classe}</span>
+              <div className="flex-1">
+                <p className="text-text_main text-sm font-semibold leading-tight">
+                  {fmtInt(a.itens)} itens
+                  <span className="text-subtext font-normal"> · {a.pct_valor_vendido}% das vendas</span>
+                </p>
+                <p className="text-subtext text-[10px]">{brl(a.valor_estoque)} em estoque</p>
               </div>
             </div>
-          )}
+          ))}
+        </div>
+        <Card>
+          <CardTitle>Valor em Estoque por Classe</CardTitle>
+          <PieChart
+            data={abcPie} nameKey="label" valueKey="valor_estoque" showValue
+            colors={[ABC_COLOR.A, ABC_COLOR.B, ABC_COLOR.C]}
+            tooltipContext={{
+              title: 'Valor em estoque',
+              formula: 'Classe pela participação no valor vendido 90d: A=80% · B=15% · C=5%',
+              extra: [
+                { key: 'itens', label: 'Itens', formatter: fmtInt },
+                { key: 'val_vendido_90d', label: 'Vendido 90d', formatter: brl },
+              ],
+            }}
+          />
+        </Card>
+        <Card>
+          <CardTitle right="top 10 · valor de estoque">Valor por Marca</CardTitle>
+          <BarChart
+            data={marcaChart} xKey="DescrMarca" horizontal height={230} yAxisWidth={96}
+            bars={[{ key: 'valor_estoque', label: 'Valor em estoque', formatter: shortBrl }]}
+            colors={['#1f6feb']}
+            tooltipExtra={[
+              { key: 'qtd_itens', label: 'Itens', formatter: fmtInt },
+              { key: 'quantidade_total', label: 'Unidades', formatter: fmtInt },
+            ]}
+          />
+        </Card>
+      </div>
 
+      {/* ── Evolução ── */}
+      <SectionLabel>Evolução do Estoque (12 meses)</SectionLabel>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
+        <Card>
+          <CardTitle right="reconstruído pelos movimentos · custo médio atual">
+            Valor em Estoque (R$) — estimado
+          </CardTitle>
+          <LineChart data={evolucao} xKey="mes"
+            lines={[{ key: 'valor_estimado', label: 'Valor estimado', formatter: shortBrl }]}
+            colors={['#1f6feb']} />
+        </Card>
+        <Card>
+          <CardTitle right="reconstruído pelos movimentos">
+            Quantidade em Estoque (unidades)
+          </CardTitle>
+          <LineChart data={evolucao} xKey="mes"
+            lines={[{ key: 'qtd', label: 'Quantidade', formatter: fmtInt }]}
+            colors={['#238636']} />
+        </Card>
+      </div>
+      <p className="text-subtext text-[10px] mt-1.5 opacity-70">
+        Série reconstruída a partir das entradas/saídas (o ERP não guarda foto diária do estoque).
+        Snapshots reais passaram a ser gravados diariamente
+        {evolucaoReal.length > 0 && <> desde {fmtDate(evolucaoReal[0].day)}</>} — com o tempo, a
+        evolução se torna 100% medida.
+      </p>
+
+      {/* ── Entradas × Saídas ── */}
+      <SectionLabel>Entradas × Saídas por Mês</SectionLabel>
+      <Card>
+        <BarChart
+          data={entradasSaidas} xKey="mes" height={240}
+          bars={[
+            { key: 'entradas', label: 'Entradas', formatter: fmtInt },
+            { key: 'saidas',   label: 'Saídas',   formatter: fmtInt },
+          ]}
+          colors={['#1f6feb', '#d29922']}
+        />
+      </Card>
+
+      {/* ── Giro ── */}
+      <SectionLabel>Giro de Estoque (90 dias)</SectionLabel>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5">
+        <Card>
+          <CardTitle right="venda líquida 90d ÷ estoque atual">🔥 Maior Rotatividade — top 10</CardTitle>
+          <BarChart
+            data={giroTopChart} xKey="DescrCurta" horizontal height={260} yAxisWidth={120}
+            bars={[{ key: 'giro90d', label: 'Giro 90d', formatter: v => Number(v).toFixed(1) }]}
+            colors={['#238636']} showLabels
+            tooltipExtra={[
+              { key: 'DescrItem',             label: 'Item' },
+              { key: 'qtd_vendas_brutas_90d', label: 'Vendas 90d',        formatter: fmtInt },
+              { key: 'qtd_devolvida_90d',     label: 'Devoluções 90d',    formatter: fmtInt },
+              { key: 'qtd_vendida_90d',       label: 'Venda líquida 90d', formatter: fmtLiq },
+              { key: 'QtdEstq',               label: 'Em estoque',        formatter: fmtInt },
+              { key: 'cobertura_dias',        label: 'Cobertura',         formatter: v => (v == null ? '—' : `${v} dias`) },
+            ]}
+          />
+        </Card>
+        <Card>
+          <CardTitle right="menor giro · maior valor parado">🧊 Menor Rotatividade — top 10</CardTitle>
+          <BarChart
+            data={giroBottomChart} xKey="DescrCurta" horizontal height={260} yAxisWidth={120}
+            bars={[{ key: 'VlrEstq', label: 'Valor parado', formatter: shortBrl }]}
+            colors={['#da3633']} showLabels
+            tooltipExtra={[
+              { key: 'DescrItem',             label: 'Item' },
+              { key: 'giro90d',               label: 'Giro 90d',          formatter: v => Number(v ?? 0).toFixed(2) },
+              { key: 'qtd_vendas_brutas_90d', label: 'Vendas 90d',        formatter: fmtInt },
+              { key: 'qtd_devolvida_90d',     label: 'Devoluções 90d',    formatter: fmtInt },
+              { key: 'qtd_vendida_90d',       label: 'Venda líquida 90d', formatter: fmtLiq },
+              { key: 'QtdEstq',               label: 'Em estoque',        formatter: fmtInt },
+            ]}
+          />
+        </Card>
+      </div>
+
+      {/* ── Tabela detalhada ── */}
+      <SectionLabel>Tabela Detalhada</SectionLabel>
+      <Card>
+        {/* Chips de situação */}
+        <div className="flex flex-wrap items-center gap-1.5 mb-3">
+          {SITUACOES.map(s => {
+            const active = situacao === s.key;
+            const count = s.key === 'todos'  ? tabela.length
+                        : s.key === 'min'    ? (data?.abaixo_min_lista ?? []).length
+                        : s.key === 'parado' ? (data?.parado_lista ?? []).length
+                        : (data?.zerados_lista ?? []).length;
+            return (
+              <button key={s.key} onClick={() => selectSituacao(s.key)}
+                className="rounded-full transition-all"
+                style={{
+                  fontSize: 11, padding: '4px 12px', fontWeight: active ? 700 : 400,
+                  background: active ? s.color : '#21262d',
+                  color: active ? '#fff' : '#8b949e',
+                  border: `1px solid ${active ? s.color : '#30363d'}`,
+                }}>
+                {s.label} · {fmtInt(count)}
+              </button>
+            );
+          })}
+          <div className="flex-1" />
+          <input
+            type="text" placeholder="Buscar produto ou código…"
+            value={textoBusca}
+            onChange={e => { setTextoBusca(e.target.value); setPage(0); }}
+            className="w-56 px-3 py-1.5 text-xs bg-bg border border-card_border rounded-lg text-text_main placeholder-subtext focus:outline-none focus:border-accent"
+          />
+          <select
+            value={marcaSel}
+            onChange={e => { setMarcaSel(e.target.value); setPage(0); }}
+            className="bg-bg border border-card_border rounded-lg px-2 py-1.5 text-text_main text-xs focus:outline-none focus:border-accent"
+          >
+            {marcasOpts.map(m => (
+              <option key={m} value={m}>{m === 'todas' ? 'Todas as marcas' : m}</option>
+            ))}
+          </select>
+          {situacao === 'todos' && (
+            <select
+              value={abcSel}
+              onChange={e => { setAbcSel(e.target.value); setPage(0); }}
+              className="bg-bg border border-card_border rounded-lg px-2 py-1.5 text-text_main text-xs focus:outline-none focus:border-accent"
+            >
+              <option value="todas">ABC: todas</option>
+              <option value="A">Classe A</option>
+              <option value="B">Classe B</option>
+              <option value="C">Classe C</option>
+            </select>
+          )}
         </div>
 
-      </div>
+        <DataTable columns={COLS_MAP[situacao]} rows={rowsPage} />
+
+        {/* Paginação */}
+        <div className="flex items-center justify-between mt-2 text-[10px] text-subtext">
+          <span>
+            {fmtInt(rowsFiltradas.length)} itens
+            {situacao !== 'todos' && <> · <span style={{ color: situacaoAtiva.color }}>{situacaoAtiva.label}</span></>}
+            {totalPages > 1 && <> · pág {page + 1}/{totalPages}</>}
+          </span>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button disabled={page === 0} onClick={() => setPage(0)}
+                className="px-1.5 py-0.5 rounded bg-progress_bg disabled:opacity-30 hover:text-text_main">«</button>
+              <button disabled={page === 0} onClick={() => setPage(p => p - 1)}
+                className="px-1.5 py-0.5 rounded bg-progress_bg disabled:opacity-30 hover:text-text_main">‹</button>
+              <button disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}
+                className="px-1.5 py-0.5 rounded bg-progress_bg disabled:opacity-30 hover:text-text_main">›</button>
+              <button disabled={page >= totalPages - 1} onClick={() => setPage(totalPages - 1)}
+                className="px-1.5 py-0.5 rounded bg-progress_bg disabled:opacity-30 hover:text-text_main">»</button>
+            </div>
+          )}
+        </div>
+      </Card>
     </div>
   );
 }

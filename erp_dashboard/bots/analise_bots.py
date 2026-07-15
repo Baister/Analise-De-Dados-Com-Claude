@@ -49,6 +49,16 @@ def _safe_int(df: pd.DataFrame, col: str) -> int:
     return int(_safe_float(df, col))
 
 
+def _py_records(records: list) -> list:
+    """Converte escalares numpy (int64/float64) em tipos Python nativos para que
+    o JSON emita números de verdade (e não strings via default=str)."""
+    out = []
+    for r in records:
+        out.append({k: (v.item() if hasattr(v, "item") and not isinstance(v, (str, bytes)) else v)
+                    for k, v in r.items()})
+    return out
+
+
 # ──────────────────────────────────────────────────────────────────
 class BaseBot(threading.Thread):
     def __init__(self, name: str):
@@ -1161,428 +1171,104 @@ class BotVendas(BaseBot):
 #  BOT ESTOQUE
 # ──────────────────────────────────────────────────────────────────
 class BotEstoque(BaseBot):
-    """Detecta colunas em runtime via SELECT TOP 0 * para tolerar variações de schema.
-    Views usadas (somente SELECT): vmAnaliseEstqItem, vmAnaliseEstqVnd,
-    vmItemMovEstq, vmSugestaoTransfEstq, vwEstqTempOs, vwFuncRespEstq."""
-
-    _VIEWS = {
-        "item": "Blue.dbo.vmAnaliseEstqItem",
-        "vnd":  "Blue.dbo.vmAnaliseEstqVnd",
-        "mov":  "Blue.dbo.vmItemMovEstq",
-        "sug":  "Blue.dbo.vmSugestaoTransfEstq",
-        "os":   "Blue.dbo.vwEstqTempOs",
-        "func": "Blue.dbo.vwFuncRespEstq",
-    }
+    """Análise de estoque — KPIs, Curva ABC, giro, cobertura, estoque parado,
+    entradas×saídas e evolução (reconstruída por movimentos + snapshots diários
+    locais no cache). Views (somente SELECT): vmAnaliseEstqItem, vmVndItemDoc,
+    vmItemMovEstq, vmSugestaoTransfEstq, vwEstqTempOs; tabela TbProd (EstqMinExpo).
+    Uma query-base por item alimenta KPIs/ABC/giro/cobertura/tabela detalhada;
+    o restante roda em paralelo. Chaves legadas do desktop (ui/app.py) mantidas."""
 
     def __init__(self):
         super().__init__("estoque")
-        self._s: dict[str, list] = {}
-        self._loaded = False
-
-    def _load_schemas(self):
-        if self._loaded:
-            return
-        for tag, view in self._VIEWS.items():
-            df = db.query(f"SELECT TOP 0 * FROM {view} WITH (NOLOCK)")
-            if len(df.columns) > 0:
-                self._s[tag] = list(df.columns)
-            else:
-                # TOP 0 pode falhar em views com erros de compilação — tenta TOP 1 como fallback
-                df1 = db.query(f"SELECT TOP 1 * FROM {view} WITH (NOLOCK)")
-                self._s[tag] = list(df1.columns) if len(df1.columns) > 0 else []
-            logger.info("[Estq] %-4s %-32s → %s",
-                        tag, view.split(".")[-1],
-                        self._s[tag] if self._s[tag] else "(INACESSÍVEL)")
-        self._loaded = True
-
-    def _c(self, tag: str, *cands: str) -> str:
-        """Retorna o primeiro candidato encontrado no schema (insensível a maiúsculas)."""
-        lc = {c.lower(): c for c in self._s.get(tag, [])}
-        for cand in cands:
-            if cand.lower() in lc:
-                return lc[cand.lower()]
-        return ""
-
-    def _best(self, *tags: str) -> tuple:
-        """(view_path, tag) para o primeiro tag com schema disponível."""
-        for t in tags:
-            if self._s.get(t):
-                return self._VIEWS[t], t
-        return self._VIEWS[tags[0]], tags[0]
-
-    def analisar_rapido(self) -> dict:
-        """Apenas queries rápidas: KPIs + críticos + marcas. run() chama isso antes do analisar() completo."""
-        self._load_schemas()
-        ev, et = self._best("item", "vnd")
-
-        col_cod  = self._c(et, "CodItem",       "Codigo",         "CodigoItem",      "CodProduto")
-        col_dsc  = self._c(et, "DescrItem",     "Descricao",      "NomeItem",        "DescrProduto",
-                                "NomeProduto",   "DescrProd")
-        col_mrc  = self._c(et, "DescrMarca",    "Marca",          "DescrMarcaItem",  "NomeMarca",
-                                "DescrMarcaProd","MarcaItem")
-        col_qtd  = self._c(et, "QtdEstq",       "SaldoEstq",      "QtdSaldo",        "Qtd",
-                                "QtdEstoque",    "QtdTotEstq",     "QtdTotalEstq",    "SaldoQtd",
-                                "QtdSaldoEstq",  "QuantidadeEstq", "Quantidade")
-        col_disp = self._c(et, "QtdEstqDisp",   "SaldoDisp",      "QtdDisp",         "QtdSaldoDisp",
-                                "QtdEstqDisponiveis","QtdDisponivel","QtdEstoqueDisp", "QtdSaldoDisponivel",
-                                "SaldoDisponivel","QtdDispEstq")
-        col_vlr  = self._c(et, "VlrEstq",       "ValEstq",        "VlrTotEstq",      "SaldoVlr",
-                                "ValorEstoque",  "VlrTotalEstq",   "ValTotEstq",      "VlrTotal",
-                                "ValorTotal",    "TotVlrEstq",     "VlrEstoque",      "VlrSaldoEstq",
-                                "ValSaldoEstq",  "VlrTotItem",     "ValTotItem")
-        col_cst  = self._c(et, "CustoRepProd",  "CustoRep",       "ValCustoRep",     "CustoReposicao",
-                                "CustoRepItem",  "VlrCustoRep")
-        col_forn = self._c(et, "FornecUltCmp",  "FornecUltima",   "CodFornecUlt",    "Fornecedor",
-                                "NomeFornec",    "FornecedorUlt")
-        col_pend = self._c(et, "QtdPendPedCmp", "PendPed",        "QtdPedCmp",       "QtdPendCmp",
-                                "QtdPendentePed","QtdPendCompra")
-        col_dtv  = (self._c(et, "DtUltVnd",     "DtUltimaVenda",  "DtVnd",           "UltDtVnd",
-                                "DtUltVenda",    "DataUltVnd",     "DataUltimaVenda", "DtUltimaVnd")
-                    or self._c(self._best("vnd", "item")[1],
-                                "DtUltVnd",     "DtUltimaVenda",  "DtVnd",           "UltDtVnd",
-                                "DtUltVenda",    "DataUltVnd",     "DataUltimaVenda", "DtUltimaVnd"))
-
-        def _sum(col, alias):
-            return f"SUM(ISNULL({col},0)) AS {alias}" if col else f"0 AS {alias}"
-
-        wh_q    = f"WHERE ISNULL({col_qtd},0)>0" if col_qtd else ""
-        zero_ex = (f"SUM(CASE WHEN ISNULL({col_disp},0)<=0 THEN 1 ELSE 0 END) AS itens_zerados"
-                   if col_disp else "0 AS itens_zerados")
-        giro_ex = (f"SUM(CASE WHEN ISNULL(DATEDIFF(day,{col_dtv},GETDATE()),9999)"
-                   f">{DIAS_CRITICO} THEN 1 ELSE 0 END) AS itens_sem_giro"
-                   if col_dtv else "0 AS itens_sem_giro")
-
-        df_resumo = db.query(f"""
-            SELECT COUNT(*) AS total_itens,
-                   {_sum(col_vlr, 'valor_total_estoque')},
-                   {_sum(col_qtd, 'qtd_total')},
-                   {_sum(col_disp,'qtd_disponivel')},
-                   {zero_ex}, {giro_ex}
-            FROM {ev} WITH (NOLOCK) {wh_q}
-        """)
-
-        _cp = list(filter(None, [
-            f"e.{col_cod}  AS CodItem"       if col_cod  else None,
-            f"e.{col_dsc}  AS DescrItem"     if col_dsc  else None,
-            f"e.{col_mrc}  AS DescrMarca"    if col_mrc  else None,
-            f"e.{col_qtd}  AS QtdEstq"       if col_qtd  else None,
-            f"e.{col_disp} AS QtdEstqDisp"   if col_disp else None,
-            (f"CASE WHEN ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999)>120 THEN 120"
-             f" ELSE ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),0) END AS DiasSemVnd"
-             if col_dtv else None),
-            f"e.{col_dtv}  AS DtUltVnd"      if col_dtv  else None,
-            f"e.{col_cst}  AS CustoRepProd"  if col_cst  else None,
-            f"e.{col_vlr}  AS VlrEstq"       if col_vlr  else None,
-            f"e.{col_pend} AS QtdPendPedCmp" if col_pend else None,
-            f"e.{col_forn} AS FornecUltCmp"  if col_forn else None,
-        ]))
-        _wd = (f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999)>{DIAS_CRITICO}"
-               if col_dtv else "")
-        _wz = f"e.{col_disp}<=0" if col_disp else ""
-        _od = f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999) DESC," if col_dtv else ""
-        _ov = f"e.{col_vlr} DESC" if col_vlr else "1"
-        _where_crit = " OR ".join(filter(None, [_wd, _wz])) or "1=1"
-        df_criticos = db.query(f"""
-            SELECT TOP {MAX} {", ".join(_cp) if _cp else "e.*"}
-            FROM {ev} e WITH (NOLOCK) WHERE {_where_crit}
-            ORDER BY {_od} {_ov}
-        """)
-
-        df_marca = db.query(f"""
-            SELECT TOP 30 e.{col_mrc} AS DescrMarca,
-                COUNT(*) AS qtd_itens,
-                {_sum(col_vlr, 'valor_estoque')},
-                {_sum(col_qtd, 'quantidade_total')}
-            FROM {ev} e WITH (NOLOCK) GROUP BY e.{col_mrc} ORDER BY valor_estoque DESC
-        """) if col_mrc else pd.DataFrame()
-
-        def _recs(df):
-            return df.to_dict("records") if not df.empty else []
-
-        # Deriva zerados_lista de df_criticos — sem query adicional ao banco
-        _zer_keep = [c for c in ["CodItem", "DescrItem", "DescrMarca", "VlrEstq", "DtUltVnd"]
-                     if c in df_criticos.columns]
-        if not df_criticos.empty and "QtdEstqDisp" in df_criticos.columns:
-            _df_zer = df_criticos[df_criticos["QtdEstqDisp"].fillna(0) <= 0].copy()
-            if "DtUltVnd" in _df_zer.columns:
-                _df_zer = _df_zer.sort_values("DtUltVnd", na_position="last")
-            _zerados_lista = _df_zer[_zer_keep].to_dict("records") if not _df_zer.empty else []
-        else:
-            _zerados_lista = []
-
-        # Deriva sem_giro_lista: itens com DiasSemVnd >= DIAS_CRITICO, mais parados primeiro
-        _sg_keep = [c for c in ["CodItem", "DescrItem", "DescrMarca", "QtdEstq", "VlrEstq", "DtUltVnd"]
-                    if c in df_criticos.columns]
-        if not df_criticos.empty and "DiasSemVnd" in df_criticos.columns:
-            _df_sg = df_criticos[df_criticos["DiasSemVnd"] >= DIAS_CRITICO].copy()
-            if "DtUltVnd" in _df_sg.columns:
-                _hoje = pd.Timestamp.now()
-                _df_sg["DiasSemVndReal"] = _df_sg["DtUltVnd"].apply(
-                    lambda d: int((_hoje - pd.Timestamp(d)).days) if pd.notna(d) else None
-                )
-                _sg_keep.append("DiasSemVndReal")
-                _df_sg = _df_sg.sort_values("DiasSemVndReal", ascending=False, na_position="last")
-            else:
-                _df_sg = _df_sg.sort_values("DiasSemVnd", ascending=False, na_position="last")
-            _sem_giro_lista = _df_sg[[c for c in _sg_keep if c in _df_sg.columns]].to_dict("records") if not _df_sg.empty else []
-        else:
-            _sem_giro_lista = []
-
-        return {
-            "total_itens":         _safe_int(df_resumo,  "total_itens"),
-            "valor_total_estoque": _safe_float(df_resumo, "valor_total_estoque"),
-            "qtd_disponivel":      _safe_int(df_resumo,  "qtd_disponivel"),
-            "itens_zerados":       _safe_int(df_resumo,  "itens_zerados"),
-            "itens_sem_giro":      _safe_int(df_resumo,  "itens_sem_giro"),
-            "zerados_lista":       _zerados_lista,
-            "sem_giro_lista":      _sem_giro_lista,
-            "por_marca":           _recs(df_marca),
-            "ultimo_update":       datetime.now().strftime("%H:%M:%S"),
-        }
 
     def analisar(self) -> dict:
         t0 = time.time()
-        self._load_schemas()
-        ev,  et  = self._best("item", "vnd")
-        evv, evt = self._best("vnd",  "item")
 
-        # ── Detecção de colunas (sem DB) ───────────────────────────
-        col_cod  = self._c(et,  "CodItem",       "Codigo",         "CodigoItem",      "CodProduto")
-        col_dsc  = self._c(et,  "DescrItem",     "Descricao",      "NomeItem",        "DescrProduto",
-                                "NomeProduto",   "DescrProd")
-        col_mrc  = self._c(et,  "DescrMarca",    "Marca",          "DescrMarcaItem",  "NomeMarca",
-                                "DescrMarcaProd","MarcaItem")
-        col_qtd  = self._c(et,  "QtdEstq",       "SaldoEstq",      "QtdSaldo",        "Qtd",
-                                "QtdEstoque",    "QtdTotEstq",     "QtdTotalEstq",    "SaldoQtd",
-                                "QtdSaldoEstq",  "QuantidadeEstq", "Quantidade")
-        col_disp = self._c(et,  "QtdEstqDisp",   "SaldoDisp",      "QtdDisp",         "QtdSaldoDisp",
-                                "QtdEstqDisponiveis","QtdDisponivel","QtdEstoqueDisp",  "QtdSaldoDisponivel",
-                                "SaldoDisponivel","QtdDispEstq")
-        col_vlr  = self._c(et,  "VlrEstq",       "ValEstq",        "VlrTotEstq",      "SaldoVlr",
-                                "ValorEstoque",  "VlrTotalEstq",   "ValTotEstq",      "VlrTotal",
-                                "ValorTotal",    "TotVlrEstq",     "VlrEstoque",      "VlrSaldoEstq",
-                                "ValSaldoEstq",  "VlrTotItem",     "ValTotItem")
-        col_cst  = self._c(et,  "CustoRepProd",  "CustoRep",       "ValCustoRep",     "CustoReposicao",
-                                "CustoRepItem",  "VlrCustoRep")
-        col_forn = self._c(et,  "FornecUltCmp",  "FornecUltima",   "CodFornecUlt",    "Fornecedor",
-                                "NomeFornec",    "FornecedorUlt")
-        col_pend = self._c(et,  "QtdPendPedCmp", "PendPed",        "QtdPedCmp",       "QtdPendCmp",
-                                "QtdPendentePed","QtdPendCompra")
-        col_dtv  = (self._c(et,  "DtUltVnd",      "DtUltimaVenda",  "DtVnd",           "UltDtVnd",
-                                "DtUltVenda",    "DataUltVnd",     "DataUltimaVenda", "DtUltimaVnd")
-                    or self._c(evt,"DtUltVnd",   "DtUltimaVenda",  "DtVnd",           "UltDtVnd",
-                                "DtUltVenda",    "DataUltVnd",     "DataUltimaVenda", "DtUltimaVnd"))
-
-        logger.info("[Estq] Cols detectadas: ev=%s | cod='%s' qtd='%s' vlr='%s' disp='%s' dtv='%s'",
-                    ev.split(".")[-1], col_cod, col_qtd, col_vlr, col_disp, col_dtv)
-        if not col_qtd and not col_vlr and not col_disp:
-            logger.warning("[Estq] NENHUMA coluna-chave detectada! Colunas brutas de [%s]: %s",
-                           et, self._s.get(et, []))
-
-        smov     = self._s.get("mov", [])
-        col_mcod = self._c("mov", "CodItem",      "Codigo",      "CodProduto",    "CodigoItem",  "CodItm")
-        col_mdsc = self._c("mov", "DescrItem",    "Descricao",  "NomeItem",      "DescrProduto","NomeProduto", "DescrProd")
-        col_ment = self._c("mov", "QtdEntrada",   "Entrada",    "Qtd_Entrada",   "QtdEntradas", "TotEntrada",  "EntradaQtd",  "SaldoEntrada", "QtdEnt")
-        col_msai = self._c("mov", "QtdSaida",     "Saida",      "Qtd_Saida",     "QtdSaidas",   "TotSaida",    "SaidaQtd",    "SaldoSaida",   "QtdSai", "QtdLiqVendas", "QtdLiq")
-        col_mliq = self._c("mov", "QtdLiqVendas", "QtdLiq",     "Liquido",       "QtdLiquido",  "LiqVnd")
-        col_mdt  = self._c("mov", "DtMovEstq",    "DtMov",      "Data",          "DtMovimento", "DtMov",       "DataMov")
-
-        # ── Construção das SQL strings (sem DB) ────────────────────
-        def _sum(col, alias):
-            return f"SUM(ISNULL({col},0)) AS {alias}" if col else f"0 AS {alias}"
-
-        wh_q    = f"WHERE ISNULL({col_qtd},0)>0" if col_qtd else ""
-        zero_ex = (f"SUM(CASE WHEN ISNULL({col_disp},0)<=0 THEN 1 ELSE 0 END) AS itens_zerados"
-                   if col_disp else "0 AS itens_zerados")
-        giro_ex = (f"SUM(CASE WHEN ISNULL(DATEDIFF(day,{col_dtv},GETDATE()),9999)"
-                   f">{DIAS_CRITICO} THEN 1 ELSE 0 END) AS itens_sem_giro"
-                   if col_dtv else "0 AS itens_sem_giro")
-        sql_resumo = f"""
-            SELECT COUNT(*) AS total_itens,
-                   {_sum(col_vlr, 'valor_total_estoque')},
-                   {_sum(col_qtd, 'qtd_total')},
-                   {_sum(col_disp,'qtd_disponivel')},
-                   {zero_ex}, {giro_ex}
-            FROM {ev} WITH (NOLOCK) {wh_q}
+        # ── Q1 · Base por item: estoque agregado (todas as filiais) + mínimo (TbProd)
+        sql_itens = """
+            SELECT e.CodItem,
+                MAX(e.DescrItem)             AS DescrItem,
+                MAX(e.DescrMarca)            AS DescrMarca,
+                SUM(ISNULL(e.QtdEstq,0))     AS QtdEstq,
+                SUM(ISNULL(e.QtdEstqDisp,0)) AS QtdEstqDisp,
+                SUM(ISNULL(e.VlrEstq,0))     AS VlrEstq,
+                MAX(e.DtUltVnd)              AS DtUltVnd,
+                MAX(ISNULL(p.EstqMinExpo,0)) AS EstqMin
+            FROM Blue.dbo.vmAnaliseEstqItem e WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbProd p WITH (NOLOCK)
+                ON p.CodItem = e.CodItem AND p.CodEmpr = e.CodEmpr
+            GROUP BY e.CodItem
         """
-
-        _cp = list(filter(None, [
-            f"e.{col_cod}  AS CodItem"       if col_cod  else None,
-            f"e.{col_dsc}  AS DescrItem"     if col_dsc  else None,
-            f"e.{col_mrc}  AS DescrMarca"    if col_mrc  else None,
-            f"e.{col_qtd}  AS QtdEstq"       if col_qtd  else None,
-            f"e.{col_disp} AS QtdEstqDisp"   if col_disp else None,
-            (f"CASE WHEN ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999)>120 THEN 120"
-             f" ELSE ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),0) END AS DiasSemVnd"
-             if col_dtv else None),
-            f"e.{col_dtv}  AS DtUltVnd"      if col_dtv  else None,
-            f"e.{col_cst}  AS CustoRepProd"  if col_cst  else None,
-            f"e.{col_vlr}  AS VlrEstq"       if col_vlr  else None,
-            f"e.{col_pend} AS QtdPendPedCmp" if col_pend else None,
-            f"e.{col_forn} AS FornecUltCmp"  if col_forn else None,
-        ]))
-        _wd = (f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999)>{DIAS_CRITICO}"
-               if col_dtv else "")
-        _wz = f"e.{col_disp}<=0" if col_disp else ""
-        _od = f"ISNULL(DATEDIFF(day,e.{col_dtv},GETDATE()),9999) DESC," if col_dtv else ""
-        _ov = f"e.{col_vlr} DESC" if col_vlr else "1"
-        _where_crit = " OR ".join(filter(None, [_wd, _wz])) or "1=1"
-        sql_criticos = f"""
-            SELECT TOP {MAX} {", ".join(_cp) if _cp else "e.*"}
-            FROM {ev} e WITH (NOLOCK) WHERE {_where_crit}
-            ORDER BY {_od} {_ov}
+        # ── Q2 · Vendas 90d por item (demanda p/ giro, cobertura e Curva ABC)
+        # qtd_vendida_90d é a VENDA LÍQUIDA (devoluções entram com QtdItem negativo);
+        # brutas e devoluções também saem separadas p/ tooltip transparente no front.
+        sql_vnd90 = f"""
+            SELECT i.CodItem,
+                SUM(i.QtdItem)         AS qtd_vendida_90d,
+                SUM(i.PrecoVndTotItem) AS val_vendido_90d,
+                SUM(CASE WHEN i.QtdItem > 0 THEN i.QtdItem  ELSE 0 END) AS qtd_vendas_brutas_90d,
+                SUM(CASE WHEN i.QtdItem < 0 THEN -i.QtdItem ELSE 0 END) AS qtd_devolvida_90d
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            WHERE i.DtVnd >= DATEADD(day, -90, GETDATE())
+              AND i.CodPlanoVnd NOT IN ('{_pl}')
+            GROUP BY i.CodItem
         """
-
-        sql_marca = (f"""
-            SELECT TOP 30 e.{col_mrc} AS DescrMarca,
-                COUNT(*) AS qtd_itens,
-                {_sum(col_vlr, 'valor_estoque')},
-                {_sum(col_qtd, 'quantidade_total')}
-            FROM {ev} e WITH (NOLOCK) GROUP BY e.{col_mrc} ORDER BY valor_estoque DESC
-        """ if col_mrc else None)
-
-        _wm = f"m.{col_mdt}>=DATEADD(day,-30,GETDATE())" if col_mdt else "1=1"
-        sql_mov = None
-        if smov and col_mcod:
-            _mp = [f"m.{col_mcod} AS CodItem"]
-            if col_mdsc: _mp.append(f"m.{col_mdsc} AS DescrItem")
-            _mp.append(f"SUM(m.{col_ment}) AS entradas" if col_ment else "0 AS entradas")
-            _mp.append(f"SUM(m.{col_msai}) AS saidas"   if col_msai else "0 AS saidas")
-            if col_mliq: _mp.append(f"SUM(m.{col_mliq}) AS vendas_liquidas")
-            _grp = f"m.{col_mcod}" + (f", m.{col_mdsc}" if col_mdsc else "")
-            sql_mov = f"""
-                SELECT TOP 2000 {", ".join(_mp)}
-                FROM Blue.dbo.vmItemMovEstq m WITH (NOLOCK) WHERE {_wm}
-                GROUP BY {_grp} ORDER BY saidas DESC
-            """
-
-        sql_giro_bruto = None
-        if col_cod:
-            # GROUP BY e.CodItem para colapsar múltiplas linhas por filial (CodEmpr)
-            # que vmAnaliseEstqItem retorna uma por (CodEmpr, CodItem).
-            _gbp = [f"e.{col_cod} AS CodItem"]
-            for _cx, _ax in [(col_dsc, "DescrItem"), (col_mrc, "DescrMarca")]:
-                if _cx:
-                    _gbp.append(f"MAX(e.{_cx}) AS {_ax}")
-            if col_qtd:
-                _gbp.append(f"SUM(ISNULL(e.{col_qtd}, 0)) AS QtdEstq")
-            if col_dtv:
-                _gbp.append(f"MAX(e.{col_dtv}) AS DtUltVnd")
-            _gbp += [
-                "ISNULL(MAX(v.qtd_vendida_90d), 0) AS qtd_vendida_90d",
-                "ISNULL(MAX(v.val_vendido_90d),  0) AS val_vendido_90d",
-            ]
-            _having_gb = f"HAVING SUM(ISNULL(e.{col_qtd},0)) > 0" if col_qtd else ""
-            sql_giro_bruto = f"""
-                SELECT TOP 500 {", ".join(_gbp)}
-                FROM {ev} e WITH (NOLOCK)
-                LEFT JOIN (
-                    SELECT i.CodItem,
-                           SUM(i.QtdItem)         AS qtd_vendida_90d,
-                           SUM(i.PrecoVndTotItem) AS val_vendido_90d
-                    FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
-                    INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK)
-                        ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
-                    WHERE d.Cancelado = '' AND i.Fat = 1
-                      AND i.DtVnd >= DATEADD(day, -90, GETDATE())
-                    GROUP BY i.CodItem
-                ) v ON e.{col_cod} = v.CodItem
-                GROUP BY e.{col_cod}
-                {_having_gb}
-                ORDER BY ISNULL(MAX(v.val_vendido_90d), 0) DESC
-            """
-
-        sql_orc_estq = None
-        if col_cod:
-            _oep = [f"e.{col_cod} AS CodItem"]
-            if col_dsc: _oep.append(f"e.{col_dsc} AS DescrItem")
-            if col_mrc: _oep.append(f"e.{col_mrc} AS DescrMarca")
-            _col_disp_oe = col_disp or col_qtd
-            _oep += [
-                f"ISNULL(e.{_col_disp_oe},0) AS QtdEstqDisp" if _col_disp_oe else "0 AS QtdEstqDisp",
-                "ISNULL(o.qtd_orcada,0) AS qtd_orcada",
-                "ISNULL(o.val_orcado, 0) AS val_orcado",
-            ]
-            sql_orc_estq = f"""
-                SELECT TOP 30 {", ".join(_oep)}
-                FROM {ev} e WITH (NOLOCK)
-                LEFT JOIN (
-                    SELECT i.CodItem,
-                           SUM(i.QtdItem)         AS qtd_orcada,
-                           SUM(i.PrecoVndTotItem) AS val_orcado
-                    FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
-                    INNER JOIN Blue.dbo.TbOrcPedVnd p WITH (NOLOCK) ON i.NrDoc=p.NrOrcPedVnd
-                    WHERE p.OrcPedVnd=1
-                      AND i.DtVnd>=DATEADD(day,-30,GETDATE())
-                    GROUP BY i.CodItem
-                ) o ON e.{col_cod}=o.CodItem
-                WHERE ISNULL(o.qtd_orcada,0)>0
-                ORDER BY qtd_orcada DESC
-            """
-
-        sql_venda_compra = None
-        if smov and col_mcod:
-            _vcp = [f"m.{col_mcod} AS CodItem"]
-            if col_mdsc: _vcp.append(f"m.{col_mdsc} AS DescrItem")
-            _vcp.append(f"SUM(m.{col_msai}) AS saidas"   if col_msai else "0 AS saidas")
-            _vcp.append(f"SUM(m.{col_ment}) AS entradas" if col_ment else "0 AS entradas")
-            _grpvc = f"m.{col_mcod}" + (f", m.{col_mdsc}" if col_mdsc else "")
-            _hvc = (f"SUM(m.{col_msai})>0 OR SUM(m.{col_ment})>0"
-                    if col_msai and col_ment else "1=1")
-            sql_venda_compra = f"""
-                SELECT TOP 30 {", ".join(_vcp)}
-                FROM Blue.dbo.vmItemMovEstq m WITH (NOLOCK)
-                WHERE {_wm} GROUP BY {_grpvc}
-                HAVING {_hvc} ORDER BY saidas DESC
-            """
-
-        sql_media_semanal = None
-        if col_cod:
-            _msp = ["i.CodItem"]
-            if col_dsc: _msp.append(f"MAX(e.{col_dsc}) AS DescrItem")
-            if col_mrc: _msp.append(f"MAX(e.{col_mrc}) AS DescrMarca")
-            _msp += ["SUM(i.QtdItem) AS total_90d",
-                     "CAST(SUM(i.QtdItem) AS FLOAT)/(90.0/7.0) AS media_semanal"]
-            if col_qtd:  _msp.append(f"MAX(ISNULL(e.{col_qtd},0)) AS QtdEstq")
-            if col_disp: _msp.append(f"MAX(ISNULL(e.{col_disp},0)) AS QtdEstqDisp")
-            _cov = (f"MAX(ISNULL(e.{col_disp},0))/(CAST(SUM(i.QtdItem) AS FLOAT)/(90.0/7.0))"
-                    if col_disp else "999")
-            _msp.append(
-                f"CASE WHEN SUM(i.QtdItem)>0 THEN {_cov} ELSE 999 END AS semanas_cobertura")
-            # JOIN com estoque só quando há colunas úteis a buscar — evita fan-out quando
-            # ev = vmAnaliseEstqVnd (N linhas por item → distorce SUM(i.QtdItem))
-            _need_join_e = any([col_dsc, col_mrc, col_qtd, col_disp])
-            _join_e_ms   = f"LEFT JOIN {ev} e WITH (NOLOCK) ON i.CodItem=e.{col_cod}" if _need_join_e else ""
-            sql_media_semanal = f"""
-                SELECT TOP {MAX} {", ".join(_msp)}
+        # ── Q3 · Entradas × Saídas por mês (12 meses)
+        sql_mov12 = """
+            SELECT YEAR(m.DtMovEstq) AS ano, MONTH(m.DtMovEstq) AS mes,
+                SUM(ISNULL(m.QtdEntrada,0)) AS entradas,
+                SUM(ISNULL(m.QtdSaida,0))   AS saidas
+            FROM Blue.dbo.vmItemMovEstq m WITH (NOLOCK)
+            WHERE m.DtMovEstq >= DATEADD(month, DATEDIFF(month,0,GETDATE()) - 11, 0)
+            GROUP BY YEAR(m.DtMovEstq), MONTH(m.DtMovEstq)
+            ORDER BY ano, mes
+        """
+        # ── Q4 · Movimentação por item 30d (legado desktop: movimentacao/venda_compra)
+        sql_mov_item = """
+            SELECT TOP 2000 m.CodItem,
+                MAX(m.DescrItem)              AS DescrItem,
+                SUM(ISNULL(m.QtdEntrada,0))   AS entradas,
+                SUM(ISNULL(m.QtdSaida,0))     AS saidas,
+                SUM(ISNULL(m.QtdLiqVendas,0)) AS vendas_liquidas
+            FROM Blue.dbo.vmItemMovEstq m WITH (NOLOCK)
+            WHERE m.DtMovEstq >= DATEADD(day, -30, GETDATE())
+            GROUP BY m.CodItem
+            ORDER BY saidas DESC
+        """
+        # ── Q5 · Orçamentos 30d × estoque disponível (legado desktop)
+        sql_orc = """
+            SELECT TOP 30 e.CodItem,
+                MAX(e.DescrItem)             AS DescrItem,
+                MAX(e.DescrMarca)            AS DescrMarca,
+                SUM(ISNULL(e.QtdEstqDisp,0)) AS QtdEstqDisp,
+                ISNULL(MAX(o.qtd_orcada),0)  AS qtd_orcada,
+                ISNULL(MAX(o.val_orcado),0)  AS val_orcado
+            FROM Blue.dbo.vmAnaliseEstqItem e WITH (NOLOCK)
+            INNER JOIN (
+                SELECT i.CodItem,
+                       SUM(i.QtdItem)         AS qtd_orcada,
+                       SUM(i.PrecoVndTotItem) AS val_orcado
                 FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
-                INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON i.NrDoc=d.NrDoc AND i.NSUDoc=d.NSUDoc
-                {_join_e_ms}
-                WHERE d.Cancelado='' AND i.Fat=1
-                  AND i.DtVnd>=DATEADD(day,-90,GETDATE())
-                GROUP BY i.CodItem ORDER BY media_semanal DESC
-            """
-
-        sql_sug = f"SELECT TOP {MAX} * FROM Blue.dbo.vmSugestaoTransfEstq WITH (NOLOCK)"
+                INNER JOIN Blue.dbo.TbOrcPedVnd p WITH (NOLOCK) ON i.NrDoc = p.NrOrcPedVnd
+                WHERE p.OrcPedVnd = 1
+                  AND i.DtVnd >= DATEADD(day, -30, GETDATE())
+                GROUP BY i.CodItem
+            ) o ON e.CodItem = o.CodItem
+            GROUP BY e.CodItem
+            ORDER BY ISNULL(MAX(o.qtd_orcada),0) DESC
+        """
+        sql_sug = "SELECT TOP 1000 * FROM Blue.dbo.vmSugestaoTransfEstq WITH (NOLOCK)"
         sql_os  = "SELECT TOP 200 * FROM Blue.dbo.vwEstqTempOs WITH (NOLOCK)"
 
-        # ── Execução paralela (4 workers, cada um com conexão própria) ─
-        _all_sql: dict[str, str] = {k: v for k, v in {
-            "resumo":         sql_resumo,
-            "criticos":       sql_criticos,
-            "marca":          sql_marca,
-            "mov":            sql_mov,
-            "giro_bruto":     sql_giro_bruto,
-            "orc_estq":       sql_orc_estq,
-            "venda_compra":   sql_venda_compra,
-            "media_semanal":  sql_media_semanal,
-            "sug":            sql_sug,
-            "os":             sql_os,
-        }.items() if v is not None}
-
+        # ── Execução paralela (4 workers, cada um com conexão própria) ─────
+        # itens/vnd90 são agregadas por item — truncar no teto global (5000)
+        # distorceria os totais; por isso recebem teto próprio de 20000.
+        _all_sql = {"itens": sql_itens, "vnd90": sql_vnd90, "mov12": sql_mov12,
+                    "mov_item": sql_mov_item, "orc": sql_orc, "sug": sql_sug, "os": sql_os}
+        _max_rows = {"itens": 20000, "vnd90": 20000}
         _res: dict[str, pd.DataFrame] = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-            futures = {pool.submit(db.new_conn_query, sql): key
+            futures = {pool.submit(db.new_conn_query, sql, None, _max_rows.get(key)): key
                        for key, sql in _all_sql.items()}
             for f in concurrent.futures.as_completed(futures):
                 key = futures[f]
@@ -1592,168 +1278,266 @@ class BotEstoque(BaseBot):
                     logger.error("[Estq] Erro paralelo [%s]: %s", key, e)
                     _res[key] = pd.DataFrame()
 
-        logger.info("[Estq] analisar() concluído em %.1fs (paralelo %d workers)",
-                    time.time() - t0, min(4, len(_all_sql)))
-
-        df_resumo        = _res.get("resumo",        pd.DataFrame())
-        df_criticos      = _res.get("criticos",      pd.DataFrame())
-        df_marca         = _res.get("marca",         pd.DataFrame())
-        df_mov           = _res.get("mov",           pd.DataFrame())
-        df_giro_bruto    = _res.get("giro_bruto",    pd.DataFrame())
-        df_orc_estq      = _res.get("orc_estq",      pd.DataFrame())
-        df_venda_compra  = _res.get("venda_compra",  pd.DataFrame())
-        df_media_semanal = _res.get("media_semanal", pd.DataFrame())
-        df_sug           = _res.get("sug",           pd.DataFrame())
-        df_os            = _res.get("os",            pd.DataFrame())
+        df_it  = _res.get("itens",    pd.DataFrame())
+        df_v90 = _res.get("vnd90",    pd.DataFrame())
+        df_m12 = _res.get("mov12",    pd.DataFrame())
+        df_mi  = _res.get("mov_item", pd.DataFrame())
 
         def _recs(df):
-            return df.to_dict("records") if not df.empty else []
+            return _py_records(df.to_dict("records")) if df is not None and not df.empty else []
 
-        # Deriva zerados_lista de df_criticos — sem query adicional ao banco
-        _zer_keep2 = [c for c in ["CodItem", "DescrItem", "DescrMarca", "VlrEstq", "DtUltVnd"]
-                      if c in df_criticos.columns]
-        if not df_criticos.empty and "QtdEstqDisp" in df_criticos.columns:
-            _df_zer2 = df_criticos[df_criticos["QtdEstqDisp"].fillna(0) <= 0].copy()
-            if "DtUltVnd" in _df_zer2.columns:
-                _df_zer2 = _df_zer2.sort_values("DtUltVnd", na_position="last")
-            _zerados_lista2 = _df_zer2[_zer_keep2].to_dict("records") if not _df_zer2.empty else []
-        else:
-            _zerados_lista2 = []
+        _now_str = datetime.now().strftime("%H:%M:%S")
+        if df_it.empty:
+            logger.warning("[Estq] vmAnaliseEstqItem sem dados — payload mínimo")
+            return {
+                "total_itens": 0, "valor_total_estoque": 0.0, "qtd_disponivel": 0,
+                "itens_zerados": 0, "itens_sem_giro": 0, "zerados_lista": [],
+                "sem_giro_lista": [], "giro_bruto": [], "por_marca": [],
+                "movimentacao": _recs(df_mi), "orc_estoque": _recs(_res.get("orc")),
+                "venda_compra": [], "media_semanal": [],
+                "sugestao_transferencia": _recs(_res.get("sug")), "estq_os": _recs(_res.get("os")),
+                "skus": 0, "skus_com_estoque": 0, "qtd_total": 0.0,
+                "cobertura_media_dias": None,
+                "abaixo_min_qtd": 0, "abaixo_min_total_config": 0, "abaixo_min_lista": [],
+                "parado_qtd": 0, "parado_valor": 0.0, "parado_lista": [],
+                "abc_resumo": [], "giro_top": [], "giro_bottom": [],
+                "entradas_saidas": [], "evolucao_estimada": [], "evolucao_real": [],
+                "tabela_detalhada": [],
+                "ultimo_update": _now_str,
+            }
 
-        # Deriva sem_giro_lista: itens com DiasSemVnd >= DIAS_CRITICO, mais parados primeiro
-        _sg_keep2 = [c for c in ["CodItem", "DescrItem", "DescrMarca", "QtdEstq", "VlrEstq", "DtUltVnd"]
-                     if c in df_criticos.columns]
-        if not df_criticos.empty and "DiasSemVnd" in df_criticos.columns:
-            _df_sg2 = df_criticos[df_criticos["DiasSemVnd"] >= DIAS_CRITICO].copy()
-            if "DtUltVnd" in _df_sg2.columns:
-                _hoje2 = pd.Timestamp.now()
-                _df_sg2["DiasSemVndReal"] = _df_sg2["DtUltVnd"].apply(
-                    lambda d: int((_hoje2 - pd.Timestamp(d)).days) if pd.notna(d) else None
-                )
-                _sg_keep2.append("DiasSemVndReal")
-                _df_sg2 = _df_sg2.sort_values("DiasSemVndReal", ascending=False, na_position="last")
-            else:
-                _df_sg2 = _df_sg2.sort_values("DiasSemVnd", ascending=False, na_position="last")
-            _sem_giro_lista2 = _df_sg2[[c for c in _sg_keep2 if c in _df_sg2.columns]].to_dict("records") if not _df_sg2.empty else []
+        # ── Base por item (pandas) ─────────────────────────────────────────
+        base = df_it.copy()
+        base["CodItem"]    = base["CodItem"].astype(str).str.strip()
+        base["DescrItem"]  = base["DescrItem"].fillna("—").astype(str).str.strip()
+        base["DescrMarca"] = base["DescrMarca"].fillna("—").astype(str).str.strip()
+        for c in ("QtdEstq", "QtdEstqDisp", "VlrEstq", "EstqMin"):
+            base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0.0).astype(float)
+
+        _v90_cols = ("qtd_vendida_90d", "val_vendido_90d",
+                     "qtd_vendas_brutas_90d", "qtd_devolvida_90d")
+        if not df_v90.empty:
+            df_v90 = df_v90.copy()
+            df_v90["CodItem"] = df_v90["CodItem"].astype(str).str.strip()
+            for c in _v90_cols:
+                df_v90[c] = pd.to_numeric(df_v90[c], errors="coerce").fillna(0.0)
+            base = base.merge(df_v90, on="CodItem", how="left")
+        for c in _v90_cols:
+            if c not in base.columns:
+                base[c] = 0.0
+            base[c] = base[c].fillna(0.0).astype(float)
+
+        _hoje = pd.Timestamp.now()
+        base["DtUltVnd"] = pd.to_datetime(base["DtUltVnd"], errors="coerce")
+        base["DiasSemVndReal"] = base["DtUltVnd"].apply(
+            lambda d: int((_hoje - d).days) if pd.notna(d) else None)
+        base["DtUltVnd"] = base["DtUltVnd"].apply(
+            lambda d: d.strftime("%Y-%m-%d") if pd.notna(d) else None)
+
+        # Giro 90d = vendas ÷ estoque atual · Cobertura = disponível ÷ demanda diária
+        base["giro90d"] = base.apply(
+            lambda r: round(r["qtd_vendida_90d"] / r["QtdEstq"], 2) if r["QtdEstq"] > 0 else 0.0,
+            axis=1)
+
+        def _cobertura(r):
+            demanda_dia = r["qtd_vendida_90d"] / 90.0
+            if demanda_dia <= 0:
+                return None                     # sem demanda no período
+            if r["QtdEstqDisp"] <= 0:
+                return 0
+            return int(min(round(r["QtdEstqDisp"] / demanda_dia), 999))
+        base["cobertura_dias"] = base.apply(_cobertura, axis=1)
+
+        # Curva ABC pelo valor vendido 90d (A = 80% · B = 80–95% · C = resto/sem venda)
+        base = base.sort_values("val_vendido_90d", ascending=False).reset_index(drop=True)
+        tot_v = float(base["val_vendido_90d"].sum())
+        if tot_v > 0:
+            _acum = base["val_vendido_90d"].cumsum() / tot_v
+            base["abc"] = ["A" if a <= 0.80 else "B" if a <= 0.95 else "C" for a in _acum]
+            base.loc[base["val_vendido_90d"] <= 0, "abc"] = "C"
         else:
-            _sem_giro_lista2 = []
+            base["abc"] = "C"
+
+        # ── Máscaras / KPIs ────────────────────────────────────────────────
+        com_estq  = base[base["QtdEstq"] > 0]
+        zer_mask  = base["QtdEstqDisp"] <= 0
+        _dias     = pd.to_numeric(base["DiasSemVndReal"], errors="coerce").fillna(99999)
+        par_mask  = (base["QtdEstq"] > 0) & (_dias > DIAS_CRITICO)
+        min_mask  = base["EstqMin"] > 0
+        abx_mask  = min_mask & (base["QtdEstqDisp"] < base["EstqMin"])
+
+        skus            = int(base["CodItem"].nunique())
+        skus_com_estq   = int(len(com_estq))
+        qtd_total       = float(base["QtdEstq"].sum())
+        qtd_disponivel  = float(base["QtdEstqDisp"].sum())
+        valor_total     = float(base["VlrEstq"].sum())
+        demanda_dia_tot = float(base["qtd_vendida_90d"].sum()) / 90.0
+        cobertura_media = (int(min(round(qtd_disponivel / demanda_dia_tot), 999))
+                           if demanda_dia_tot > 0 else None)
+
+        # ── Listas ─────────────────────────────────────────────────────────
+        df_zer = base[zer_mask].sort_values("DtUltVnd", na_position="last")
+        zerados_lista = _py_records(
+            df_zer[["CodItem", "DescrItem", "DescrMarca", "VlrEstq", "DtUltVnd"]]
+            .head(500).to_dict("records"))
+
+        df_par = base[par_mask].sort_values("VlrEstq", ascending=False)
+        parado_valor = float(df_par["VlrEstq"].sum())
+        parado_lista = _py_records(
+            df_par[["CodItem", "DescrItem", "DescrMarca", "QtdEstq", "VlrEstq",
+                    "DiasSemVndReal", "DtUltVnd"]].head(500).to_dict("records"))
+
+        df_abx = base[abx_mask].copy()
+        df_abx["falta"] = (df_abx["EstqMin"] - df_abx["QtdEstqDisp"]).round(1)
+        abaixo_lista = _py_records(
+            df_abx.sort_values("falta", ascending=False)
+            [["CodItem", "DescrItem", "DescrMarca", "QtdEstqDisp", "EstqMin", "falta"]]
+            .head(300).to_dict("records"))
+
+        abc_resumo = []
+        for cls in ("A", "B", "C"):
+            sub = base[base["abc"] == cls]
+            _vv = float(sub["val_vendido_90d"].sum())
+            abc_resumo.append({
+                "classe":            cls,
+                "itens":             int(len(sub)),
+                "itens_com_estoque": int((sub["QtdEstq"] > 0).sum()),
+                "valor_estoque":     float(sub["VlrEstq"].sum()),
+                "val_vendido_90d":   _vv,
+                "pct_valor_vendido": round(_vv / tot_v * 100, 1) if tot_v > 0 else 0.0,
+            })
+
+        _giro_cols = ["CodItem", "DescrItem", "DescrMarca", "giro90d",
+                      "qtd_vendida_90d", "qtd_vendas_brutas_90d", "qtd_devolvida_90d",
+                      "QtdEstq", "VlrEstq", "cobertura_dias"]
+        _ge = base[(base["QtdEstq"] > 0) & (base["qtd_vendida_90d"] > 0)]
+        giro_top = _py_records(
+            _ge.sort_values("giro90d", ascending=False)[_giro_cols].head(10).to_dict("records"))
+        giro_bottom = _py_records(
+            com_estq.sort_values(["giro90d", "VlrEstq"], ascending=[True, False])
+            [_giro_cols].head(10).to_dict("records"))
+
+        tabela = _py_records(
+            com_estq.sort_values("VlrEstq", ascending=False)
+            [["CodItem", "DescrItem", "DescrMarca", "QtdEstq", "QtdEstqDisp", "EstqMin",
+              "giro90d", "cobertura_dias", "abc", "VlrEstq", "DtUltVnd"]]
+            .to_dict("records"))
+
+        df_marca = (com_estq.groupby("DescrMarca")
+                    .agg(qtd_itens=("CodItem", "count"),
+                         valor_estoque=("VlrEstq", "sum"),
+                         quantidade_total=("QtdEstq", "sum"))
+                    .reset_index().sort_values("valor_estoque", ascending=False).head(30))
+        por_marca = [{"DescrMarca": r["DescrMarca"], "qtd_itens": int(r["qtd_itens"]),
+                      "valor_estoque": float(r["valor_estoque"]),
+                      "quantidade_total": float(r["quantidade_total"])}
+                     for _, r in df_marca.iterrows()]
+
+        giro_bruto = _py_records(
+            com_estq.sort_values("val_vendido_90d", ascending=False)
+            [["CodItem", "DescrItem", "DescrMarca", "QtdEstq", "DtUltVnd",
+              "qtd_vendida_90d", "val_vendido_90d"]].head(500).to_dict("records"))
+
+        df_ms = base[base["qtd_vendida_90d"] > 0].copy()
+        df_ms["media_semanal"] = (df_ms["qtd_vendida_90d"] / (90.0 / 7.0)).round(2)
+        df_ms["total_90d"]     = df_ms["qtd_vendida_90d"]
+        df_ms["semanas_cobertura"] = df_ms.apply(
+            lambda r: round(min(r["QtdEstqDisp"] / r["media_semanal"], 999), 1)
+            if r["media_semanal"] > 0 else 999.0, axis=1)
+        media_semanal = _py_records(
+            df_ms.sort_values("media_semanal", ascending=False)
+            [["CodItem", "DescrItem", "DescrMarca", "media_semanal", "total_90d",
+              "QtdEstq", "QtdEstqDisp", "semanas_cobertura"]].head(500).to_dict("records"))
+
+        movimentacao, venda_compra = [], []
+        if not df_mi.empty:
+            df_mi = df_mi.copy()
+            for c in ("entradas", "saidas", "vendas_liquidas"):
+                if c in df_mi.columns:
+                    df_mi[c] = pd.to_numeric(df_mi[c], errors="coerce").fillna(0.0)
+            movimentacao = _py_records(df_mi.head(50).to_dict("records"))
+            venda_compra = _py_records(
+                df_mi[["CodItem", "DescrItem", "saidas", "entradas"]].head(30).to_dict("records"))
+
+        # ── Entradas × Saídas + evolução reconstruída (12 meses) ──────────
+        entradas_saidas, evolucao_estimada = [], []
+        if not df_m12.empty:
+            df_m12 = df_m12.copy()
+            for c in ("entradas", "saidas"):
+                df_m12[c] = pd.to_numeric(df_m12[c], errors="coerce").fillna(0.0)
+            df_m12 = df_m12.sort_values(["ano", "mes"])
+            entradas_saidas = [{"mes": f"{int(r['mes']):02d}/{int(r['ano'])}",
+                                "entradas": float(r["entradas"]),
+                                "saidas":   float(r["saidas"])}
+                               for _, r in df_m12.iterrows()]
+            # Saldo no fim do mês m = qtd_atual − Σ(entradas−saídas) dos meses seguintes.
+            # Valor estimado ao custo médio ATUAL (rotulado como estimativa no frontend).
+            custo_medio = (valor_total / qtd_total) if qtd_total > 0 else 0.0
+            _liqs = [float(r["entradas"]) - float(r["saidas"]) for _, r in df_m12.iterrows()]
+            _saldo = qtd_total
+            _saldos = [0.0] * len(_liqs)
+            for i in range(len(_liqs) - 1, -1, -1):
+                _saldos[i] = _saldo
+                _saldo -= _liqs[i]
+            evolucao_estimada = [{"mes": entradas_saidas[i]["mes"],
+                                  "qtd": round(_saldos[i], 1),
+                                  "valor_estimado": round(_saldos[i] * custo_medio, 2)}
+                                 for i in range(len(_saldos))]
+
+        # Snapshot diário REAL no cache local (1 por dia) → série cresce com o tempo
+        evolucao_real = []
+        try:
+            _cache.save_snapshot("estoque", datetime.now().strftime("%Y-%m-%d"),
+                                 {"qtd": round(qtd_total, 1), "valor": round(valor_total, 2)})
+            evolucao_real = _cache.load_snapshots("estoque", limit=180)
+        except Exception as e:
+            logger.warning("[Estq] snapshot: %s", e)
+
+        logger.info("[Estq] analisar() concluído em %.1fs (%d itens, %d na tabela)",
+                    time.time() - t0, len(base), len(tabela))
 
         return {
-            "total_itens":            _safe_int(df_resumo,  "total_itens"),
-            "valor_total_estoque":    _safe_float(df_resumo,"valor_total_estoque"),
-            "qtd_disponivel":         _safe_int(df_resumo,  "qtd_disponivel"),
-            "itens_zerados":          _safe_int(df_resumo,  "itens_zerados"),
-            "itens_sem_giro":         _safe_int(df_resumo,  "itens_sem_giro"),
-            "zerados_lista":          _zerados_lista2,
-            "sem_giro_lista":         _sem_giro_lista2,
-            "giro_bruto":             _recs(df_giro_bruto),
-            "por_marca":              _recs(df_marca),
-            "movimentacao":           df_mov.head(50).to_dict("records") if not df_mov.empty else [],
-            "orc_estoque":            _recs(df_orc_estq),
-            "venda_compra":           _recs(df_venda_compra),
-            "media_semanal":          _recs(df_media_semanal),
-            "sugestao_transferencia": _recs(df_sug),
-            "estq_os":                _recs(df_os),
-            "ultimo_update":          datetime.now().strftime("%H:%M:%S"),
+            # ── chaves legadas (desktop ui/app.py) ──
+            "total_itens":            skus_com_estq,
+            "valor_total_estoque":    valor_total,
+            "qtd_disponivel":         int(qtd_disponivel),
+            "itens_zerados":          int(zer_mask.sum()),
+            "itens_sem_giro":         int(par_mask.sum()),
+            "zerados_lista":          zerados_lista,
+            "sem_giro_lista":         parado_lista,
+            "giro_bruto":             giro_bruto,
+            "por_marca":              por_marca,
+            "movimentacao":           movimentacao,
+            "orc_estoque":            _recs(_res.get("orc")),
+            "venda_compra":           venda_compra,
+            "media_semanal":          media_semanal,
+            "sugestao_transferencia": _recs(_res.get("sug")),
+            "estq_os":                _recs(_res.get("os")),
+            # ── novas chaves (aba web reestruturada) ──
+            "skus":                    skus,
+            "skus_com_estoque":        skus_com_estq,
+            "qtd_total":               qtd_total,
+            "cobertura_media_dias":    cobertura_media,
+            "abaixo_min_qtd":          int(abx_mask.sum()),
+            "abaixo_min_total_config": int(min_mask.sum()),
+            "abaixo_min_lista":        abaixo_lista,
+            "parado_qtd":              int(par_mask.sum()),
+            "parado_valor":            parado_valor,
+            "parado_lista":            parado_lista,
+            "abc_resumo":              abc_resumo,
+            "giro_top":                giro_top,
+            "giro_bottom":             giro_bottom,
+            "entradas_saidas":         entradas_saidas,
+            "evolucao_estimada":       evolucao_estimada,
+            "evolucao_real":           evolucao_real,
+            "tabela_detalhada":        tabela,
+            "ultimo_update":           _now_str,
         }
 
     def analisar_filtrado(self, filtros: dict) -> dict:
-        self._load_schemas()
-        ev, et  = self._best("item", "vnd")
-        col_cod = self._c(et, "CodItem",   "Codigo",    "CodigoItem",  "CodProduto")
-        col_dsc = self._c(et, "DescrItem", "Descricao", "NomeItem",    "DescrProduto",
-                              "NomeProduto", "DescrProd")
-        col_mrc = self._c(et, "DescrMarca", "Marca",    "DescrMarcaItem", "NomeMarca",
-                              "DescrMarcaProd", "MarcaItem")
-        col_dtv = (self._c(et, "DtUltVnd", "DtUltimaVenda", "DtVnd", "UltDtVnd",
-                               "DtUltVenda", "DataUltVnd", "DataUltimaVenda", "DtUltimaVnd")
-                   or self._c(self._best("vnd", "item")[1],
-                               "DtUltVnd", "DtUltimaVenda", "DtVnd", "UltDtVnd"))
-        col_vlr = self._c(et, "VlrEstq", "ValEstq", "VlrTotEstq", "SaldoVlr",
-                              "ValorEstoque", "VlrTotalEstq", "ValTotEstq")
-        col_qtd = self._c(et, "QtdEstq", "SaldoEstq", "QtdSaldo", "Qtd",
-                              "QtdEstoque", "QtdTotEstq", "QtdTotalEstq")
-
-        # Apenas filtro de Marca (dt_de/dt_ate removidos — eram só para criticos)
-        parts:  list = ["1=1"]
-        params: list = []
-        if filtros.get("marca") and col_mrc:
-            parts.append(f"e.{col_mrc} LIKE ?")
-            params.append(f"%{filtros['marca'][:100]}%")
-
-        r = self.analisar_rapido()
-
-        # Filtra zerados_lista e sem_giro_lista por Marca (Python, sem SQL extra)
-        if filtros.get("marca"):
-            m = filtros["marca"].lower()
-            r["zerados_lista"] = [
-                z for z in r.get("zerados_lista", [])
-                if m in str(z.get("DescrMarca", "")).lower()
-            ]
-            r["sem_giro_lista"] = [
-                z for z in r.get("sem_giro_lista", [])
-                if m in str(z.get("DescrMarca", "")).lower()
-            ]
-
-        # giro_bruto com filtro de Marca aplicado
-        if col_cod:
-            _gbp = [f"e.{col_cod} AS CodItem"]
-            if col_dsc: _gbp.append(f"MAX(e.{col_dsc}) AS DescrItem")
-            if col_mrc: _gbp.append(f"MAX(e.{col_mrc}) AS DescrMarca")
-            if col_qtd: _gbp.append(f"SUM(ISNULL(e.{col_qtd},0)) AS QtdEstq")
-            if col_dtv: _gbp.append(f"MAX(e.{col_dtv}) AS DtUltVnd")
-            _gbp += [
-                "ISNULL(MAX(v.qtd_vendida_90d), 0) AS qtd_vendida_90d",
-                "ISNULL(MAX(v.val_vendido_90d),  0) AS val_vendido_90d",
-            ]
-            gb_where_parts = ["1=1"]
-            gb_having_parts: list = []
-            gb_params: list = []
-            if col_qtd:
-                gb_having_parts.append(f"SUM(ISNULL(e.{col_qtd},0)) > 0")
-            if filtros.get("marca") and col_mrc:
-                gb_where_parts.append(f"e.{col_mrc} LIKE ?")
-                gb_params.append(f"%{filtros['marca'][:100]}%")
-            _gb_having = ("HAVING " + " AND ".join(gb_having_parts)) if gb_having_parts else ""
-            sql_gb = f"""
-                SELECT TOP 500 {", ".join(_gbp)}
-                FROM {ev} e WITH (NOLOCK)
-                LEFT JOIN (
-                    SELECT i.CodItem,
-                           SUM(i.QtdItem)         AS qtd_vendida_90d,
-                           SUM(i.PrecoVndTotItem) AS val_vendido_90d
-                    FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
-                    INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK)
-                        ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
-                    WHERE d.Cancelado = '' AND i.Fat = 1
-                      AND i.DtVnd >= DATEADD(day, -90, GETDATE())
-                    GROUP BY i.CodItem
-                ) v ON e.{col_cod} = v.CodItem
-                WHERE {" AND ".join(gb_where_parts)}
-                GROUP BY e.{col_cod}
-                {_gb_having}
-                ORDER BY ISNULL(MAX(v.val_vendido_90d), 0) DESC
-            """
-            df_gb = db.query(sql_gb, gb_params if gb_params else None)
-            r["giro_bruto"] = df_gb.to_dict("records") if not df_gb.empty else []
-        else:
-            r["giro_bruto"] = []
-
-        if params:
-            def _sum(col, alias):
-                return f"SUM(ISNULL({col},0)) AS {alias}" if col else f"0 AS {alias}"
-            where = " AND ".join(parts)
-            df_f = db.query(f"""
-                SELECT COUNT(*) AS total_itens,
-                       {_sum(col_vlr, 'valor_total_estoque')},
-                       {_sum(col_qtd, 'qtd_total')}
-                FROM {ev} e WITH (NOLOCK) WHERE {where}
-            """, params)
-            r["total_itens"]         = _safe_int(df_f,   "total_itens")
-            r["valor_total_estoque"] = _safe_float(df_f, "valor_total_estoque")
-            # itens_zerados/itens_sem_giro ficam do analisar_rapido (não filtrados por marca)
-            # — recalculá-los exigiria DATEDIFF/DIAS_CRITICO por item, alto custo por chamada.
-        return r
+        # Filtros (marca/texto/classe) agora são client-side no frontend,
+        # como nas demais abas. Devolve o último resultado completo.
+        return self.resultado or self.analisar()
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -2129,6 +1913,391 @@ class BotFinanceiro(BaseBot):
 
 
 # ──────────────────────────────────────────────────────────────────
+#  BOT IMPOSTO  — ICMS · CFOP · Tributação por item
+#  Fonte real dos impostos de venda: Blue.dbo.TbNFVnd (nota fiscal).
+#  As tabelas de "livro fiscal"/apuração/saldo do ERP estão vazias ou
+#  só têm dados de 2019 — por isso NÃO são usadas aqui.
+#  IPI e ICMS-ST aparecem ~R$0: a empresa é revenda/comércio (não
+#  indústria e o ST foi retido a montante). O ST é refletido pelo CFOP
+#  (5405/6404 = saída sujeita a substituição tributária).
+# ──────────────────────────────────────────────────────────────────
+class BotImposto(BaseBot):
+    """Imposto v2 — ICMS · CFOP · Tributação, com comparativo mensal, ICMS
+    diário, evolução por CFOP, maiores NFs e regras PIS/COFINS.
+    Fonte real dos impostos de venda: Blue.dbo.TbNFVnd (as tabelas de livro
+    fiscal/apuração/ajuste do ERP estão vazias ou pararam em 2019 — ver
+    doc/ABA_IMPOSTO.txt). IPI e ICMS-ST ~R$0: empresa é revenda/comércio e o
+    ST foi retido a montante — refletido pelo CFOP (5405/6404).
+    8 queries somente-leitura em paralelo (4 workers, conexões independentes)."""
+
+    _CFOP_ST = {'5401', '5402', '5403', '5405', '5409',
+                '6401', '6402', '6403', '6404', '6409'}
+
+    def __init__(self):
+        super().__init__("imposto")
+
+    @staticmethod
+    def _classifica_uf(cod: str) -> str:
+        c = (cod or "").strip()
+        if   c.startswith('5'): return 'Dentro do Estado'
+        elif c.startswith('6'): return 'Fora do Estado'
+        elif c.startswith('7'): return 'Exterior'
+        else:                   return 'Entrada/Outras'
+
+    @staticmethod
+    def _kpis_de(df: pd.DataFrame) -> dict:
+        icms      = _safe_float(df, 'icms')
+        base_icms = _safe_float(df, 'base_icms')
+        return {
+            "qtd_nf":           _safe_int(df, 'qtd_nf'),
+            "nfs_canceladas":   _safe_int(df, 'nfs_canc'),
+            "faturamento":      _safe_float(df, 'faturamento'),
+            "base_icms":        base_icms,
+            "icms":             icms,
+            "base_st":          _safe_float(df, 'base_st'),
+            "icms_st":          _safe_float(df, 'icms_st'),
+            "base_ipi":         _safe_float(df, 'base_ipi'),
+            "ipi":              _safe_float(df, 'ipi'),
+            "isentas":          _safe_float(df, 'isentas'),
+            "outras":           _safe_float(df, 'outras'),
+            "aliquota_efetiva": (icms / base_icms * 100) if base_icms else 0.0,
+        }
+
+    def analisar(self) -> dict:
+        t0 = time.time()
+
+        # KPIs fiscais de um período (somas só de NFs NÃO canceladas + nº de canceladas)
+        def _sql_kpis(ini: str, fim: str) -> str:
+            return f"""
+                SELECT
+                    COUNT(CASE WHEN n.DataHoraCanc IS NULL THEN 1 END)     AS qtd_nf,
+                    COUNT(CASE WHEN n.DataHoraCanc IS NOT NULL THEN 1 END) AS nfs_canc,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.ValTotalNFVnd              ELSE 0 END) AS faturamento,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.BaseICMSNFVnd              ELSE 0 END) AS base_icms,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.DebICMSNFVnd               ELSE 0 END) AS icms,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.BaseCalcICMSSubstTribNFVnd ELSE 0 END) AS base_st,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.ValICMSSubstTribNFVnd      ELSE 0 END) AS icms_st,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.BaseIPINFVnd               ELSE 0 END) AS base_ipi,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.DebIPINFVnd                ELSE 0 END) AS ipi,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.IsentasNaoTribICMSNFVnd    ELSE 0 END) AS isentas,
+                    SUM(CASE WHEN n.DataHoraCanc IS NULL THEN n.OutrasOperICMSNFVnd        ELSE 0 END) AS outras
+                FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
+                WHERE n.DtEmisNFVnd >= {ini} AND n.DtEmisNFVnd < {fim}
+            """
+
+        sql_kpi_atual = _sql_kpis(_MES_INI, _MES_FIM)
+        sql_kpi_ant   = _sql_kpis(_MES_INI_ANT, _MES_FIM_ANT)
+
+        # ICMS por dia do mês corrente
+        sql_diario = f"""
+            SELECT DAY(n.DtEmisNFVnd) AS dia,
+                COUNT(*)             AS qtd_nf,
+                SUM(n.DebICMSNFVnd)  AS icms,
+                SUM(n.ValTotalNFVnd) AS faturamento
+            FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
+            WHERE n.DtEmisNFVnd >= {_MES_INI} AND n.DtEmisNFVnd < {_MES_FIM}
+              AND n.DataHoraCanc IS NULL
+            GROUP BY DAY(n.DtEmisNFVnd)
+            ORDER BY dia
+        """
+
+        # Evolução mensal (12 meses)
+        sql_evo = f"""
+            SELECT YEAR(n.DtEmisNFVnd) AS ano, MONTH(n.DtEmisNFVnd) AS mes,
+                COUNT(*) AS qtd,
+                SUM(n.DebICMSNFVnd)          AS icms,
+                SUM(n.ValICMSSubstTribNFVnd) AS icms_st,
+                SUM(n.DebIPINFVnd)           AS ipi,
+                SUM(n.ValTotalNFVnd)         AS faturamento,
+                SUM(n.BaseICMSNFVnd)         AS base_icms
+            FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
+            WHERE n.DtEmisNFVnd >= DATEADD(month, DATEDIFF(month, 0, GETDATE()) - 11, 0)
+              AND n.DtEmisNFVnd <  {_MES_FIM}
+              AND n.DataHoraCanc IS NULL
+            GROUP BY YEAR(n.DtEmisNFVnd), MONTH(n.DtEmisNFVnd)
+            ORDER BY ano, mes
+        """
+
+        # Por CFOP no mês (⋈ catálogo TbCodFiscOper)
+        sql_cfop = f"""
+            SELECT n.CodFisc,
+                MAX(f.AbrevNat) AS descricao,
+                MAX(f.Nat)      AS descricao_full,
+                COUNT(*)                     AS qtd,
+                SUM(n.ValTotalNFVnd)         AS total,
+                SUM(n.BaseICMSNFVnd)         AS base_icms,
+                SUM(n.DebICMSNFVnd)          AS icms,
+                SUM(n.ValICMSSubstTribNFVnd) AS icms_st,
+                SUM(n.DebIPINFVnd)           AS ipi
+            FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbCodFiscOper f WITH (NOLOCK) ON f.CodFisc = n.CodFisc
+            WHERE n.DtEmisNFVnd >= {_MES_INI} AND n.DtEmisNFVnd < {_MES_FIM}
+              AND n.DataHoraCanc IS NULL
+            GROUP BY n.CodFisc
+            ORDER BY total DESC
+        """
+
+        # ICMS mensal por CFOP (6 meses) — vira séries no frontend
+        sql_cfop_evo = f"""
+            SELECT YEAR(n.DtEmisNFVnd) AS ano, MONTH(n.DtEmisNFVnd) AS mes,
+                RTRIM(n.CodFisc)    AS cfop,
+                SUM(n.DebICMSNFVnd) AS icms
+            FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
+            WHERE n.DtEmisNFVnd >= DATEADD(month, DATEDIFF(month, 0, GETDATE()) - 5, 0)
+              AND n.DtEmisNFVnd <  {_MES_FIM}
+              AND n.DataHoraCanc IS NULL
+            GROUP BY YEAR(n.DtEmisNFVnd), MONTH(n.DtEmisNFVnd), RTRIM(n.CodFisc)
+            ORDER BY ano, mes
+        """
+
+        # Maiores NFs por ICMS no mês (com nome do cliente)
+        sql_top_nfs = f"""
+            SELECT TOP 10 RTRIM(n.NrNFVnd) AS nr_nf,
+                n.DtEmisNFVnd,
+                ISNULL(c.NomeFantCli, RTRIM(n.CodRedCliNFVnd)) AS cliente,
+                RTRIM(n.CodFisc)  AS cfop,
+                n.BaseICMSNFVnd   AS base_icms,
+                n.DebICMSNFVnd    AS icms,
+                n.ValTotalNFVnd   AS total
+            FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON c.CodRedCt = n.CodRedCliNFVnd
+            WHERE n.DtEmisNFVnd >= {_MES_INI} AND n.DtEmisNFVnd < {_MES_FIM}
+              AND n.DataHoraCanc IS NULL
+            ORDER BY n.DebICMSNFVnd DESC
+        """
+
+        # Tributação configurada por item (cadastro TbTribItem)
+        sql_dist = """
+            SELECT t.TpTribItem, t.TribSaiItem, COUNT(DISTINCT t.CodItem) AS qtd_itens
+            FROM Blue.dbo.TbTribItem t WITH (NOLOCK)
+            GROUP BY t.TpTribItem, t.TribSaiItem
+            ORDER BY qtd_itens DESC
+        """
+        sql_itens = f"""
+            SELECT TOP 200 i.CodItem,
+                MAX(i.DescrItem)  AS DescrItem,
+                MAX(i.DescrMarca) AS marca,
+                SUM(i.QtdItem)        AS qtd_vendida,
+                SUM(i.PrecoVndTotItem) AS valor_vendido,
+                MAX(t.TpTribItem)    AS TpTribItem,
+                MAX(t.TribSaiItem)   AS TribSaiItem,
+                MAX(t.CodUFTribItem) AS uf_trib
+            FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbTribItem t WITH (NOLOCK) ON t.CodItem = i.CodItem
+            WHERE i.DtVnd >= {_MES_INI} AND i.DtVnd < {_MES_FIM}
+              AND i.CodPlanoVnd NOT IN ('{_pl}')
+            GROUP BY i.CodItem
+            ORDER BY valor_vendido DESC
+        """
+
+        # Regras PIS/COFINS configuradas (cadastro — tabela pequena)
+        sql_piscofins = """
+            SELECT TOP 20 RTRIM(p.DescrConjTribPisCofins) AS descricao,
+                RTRIM(p.CodSitTribPIS)    AS cst_pis,
+                p.AliqPIS                 AS aliq_pis,
+                RTRIM(p.CodSitTribCOFINS) AS cst_cofins,
+                p.AliqCOFINS              AS aliq_cofins
+            FROM Blue.dbo.TbTribPisCofins p WITH (NOLOCK)
+            ORDER BY p.CodTribPisCofins
+        """
+
+        _all_sql = {
+            "kpi":       sql_kpi_atual,
+            "kpi_ant":   sql_kpi_ant,
+            "diario":    sql_diario,
+            "evo":       sql_evo,
+            "cfop":      sql_cfop,
+            "cfop_evo":  sql_cfop_evo,
+            "top_nfs":   sql_top_nfs,
+            "dist":      sql_dist,
+            "itens":     sql_itens,
+            "piscofins": sql_piscofins,
+        }
+        _res: dict[str, pd.DataFrame] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {pool.submit(db.new_conn_query, sql): key
+                       for key, sql in _all_sql.items()}
+            for f in concurrent.futures.as_completed(futures):
+                key = futures[f]
+                try:
+                    _res[key] = f.result()
+                except Exception as e:
+                    logger.error("[Imposto] Erro paralelo [%s]: %s", key, e)
+                    _res[key] = pd.DataFrame()
+
+        # ── KPIs + comparativo com o mês anterior ──────────────────────
+        kpis     = self._kpis_de(_res.get("kpi", pd.DataFrame()))
+        kpis_ant = self._kpis_de(_res.get("kpi_ant", pd.DataFrame()))
+        deltas = {
+            "icms":        round(kpis["icms"] - kpis_ant["icms"], 2),
+            "faturamento": round(kpis["faturamento"] - kpis_ant["faturamento"], 2),
+            "aliquota":    round(kpis["aliquota_efetiva"] - kpis_ant["aliquota_efetiva"], 2),
+            "qtd_nf":      kpis["qtd_nf"] - kpis_ant["qtd_nf"],
+        }
+
+        # ── ICMS diário do mês ─────────────────────────────────────────
+        icms_diario = []
+        df_d = _res.get("diario", pd.DataFrame())
+        if df_d is not None and not df_d.empty:
+            for _, r in df_d.iterrows():
+                icms_diario.append({
+                    "dia":         f"{int(r['dia']):02d}",
+                    "qtd_nf":      int(r['qtd_nf'] or 0),
+                    "icms":        float(r['icms'] or 0),
+                    "faturamento": float(r['faturamento'] or 0),
+                })
+
+        # ── Evolução mensal 12m ────────────────────────────────────────
+        evolucao_mensal = []
+        df_evo = _res.get("evo", pd.DataFrame())
+        if df_evo is not None and not df_evo.empty:
+            for _, r in df_evo.iterrows():
+                bi = float(r['base_icms'] or 0)
+                ic = float(r['icms'] or 0)
+                evolucao_mensal.append({
+                    "mes":         f"{int(r['mes']):02d}/{int(r['ano'])}",
+                    "icms":        ic,
+                    "icms_st":     float(r['icms_st'] or 0),
+                    "ipi":         float(r['ipi'] or 0),
+                    "faturamento": float(r['faturamento'] or 0),
+                    "qtd":         int(r['qtd'] or 0),
+                    "aliquota":    (ic / bi * 100) if bi else 0.0,
+                })
+
+        # ── Por CFOP no mês + resumo dentro/fora do estado ─────────────
+        por_cfop = []
+        resumo_uf_map: dict = {}
+        tot_icms_mes = kpis["icms"] or 0.0
+        df_cfop = _res.get("cfop", pd.DataFrame())
+        if df_cfop is not None and not df_cfop.empty:
+            for _, r in df_cfop.iterrows():
+                cod = (str(r['CodFisc']) if r['CodFisc'] is not None else "").strip()
+                uf  = self._classifica_uf(cod)
+                tot = float(r['total'] or 0)
+                ic  = float(r['icms'] or 0)
+                desc = (r['descricao'] or r['descricao_full'] or "—")
+                por_cfop.append({
+                    "cfop":      cod,
+                    "descricao": str(desc).strip(),
+                    "qtd":       int(r['qtd'] or 0),
+                    "total":     tot,
+                    "base_icms": float(r['base_icms'] or 0),
+                    "icms":      ic,
+                    "icms_st":   float(r['icms_st'] or 0),
+                    "ipi":       float(r['ipi'] or 0),
+                    "pct_icms":  round(ic / tot_icms_mes * 100, 1) if tot_icms_mes else 0.0,
+                    "uf":        uf,
+                    "st":        cod in self._CFOP_ST,
+                })
+                acc = resumo_uf_map.setdefault(uf, {"label": uf, "total": 0.0, "icms": 0.0})
+                acc["total"] += tot
+                acc["icms"]  += ic
+        resumo_uf = sorted(resumo_uf_map.values(), key=lambda x: x["total"], reverse=True)
+
+        # ── Evolução 6m por CFOP (top 5 por ICMS acumulado) ────────────
+        cfop_evolucao, cfop_series = [], []
+        df_ce = _res.get("cfop_evo", pd.DataFrame())
+        if df_ce is not None and not df_ce.empty:
+            df_ce = df_ce.copy()
+            df_ce["icms"] = pd.to_numeric(df_ce["icms"], errors="coerce").fillna(0.0)
+            cfop_series = (df_ce.groupby("cfop")["icms"].sum()
+                           .sort_values(ascending=False).head(5).index.tolist())
+            meses_map: dict = {}
+            for _, r in df_ce.iterrows():
+                mes_lbl = f"{int(r['mes']):02d}/{int(r['ano'])}"
+                row = meses_map.setdefault(mes_lbl, {"mes": mes_lbl})
+                if r["cfop"] in cfop_series:
+                    row[r["cfop"]] = round(float(r["icms"]), 2)
+            cfop_evolucao = list(meses_map.values())
+            for row in cfop_evolucao:               # zera séries ausentes no mês
+                for s in cfop_series:
+                    row.setdefault(s, 0.0)
+
+        # ── Maiores NFs do mês por ICMS ────────────────────────────────
+        top_nfs = []
+        df_nfs = _res.get("top_nfs", pd.DataFrame())
+        if df_nfs is not None and not df_nfs.empty:
+            for _, r in df_nfs.iterrows():
+                dt = r['DtEmisNFVnd']
+                top_nfs.append({
+                    "nr_nf":     str(r['nr_nf'] or "—").strip(),
+                    "data":      dt.strftime("%Y-%m-%d") if pd.notna(dt) else None,
+                    "cliente":   str(r['cliente'] or "—").strip(),
+                    "cfop":      str(r['cfop'] or "—").strip(),
+                    "base_icms": float(r['base_icms'] or 0),
+                    "icms":      float(r['icms'] or 0),
+                    "total":     float(r['total'] or 0),
+                })
+
+        # ── Tributação por item (cadastro + vendidos no mês) ──────────
+        trib_distribuicao = []
+        df_dist = _res.get("dist", pd.DataFrame())
+        if df_dist is not None and not df_dist.empty:
+            for _, r in df_dist.iterrows():
+                tp  = (str(r['TpTribItem']).strip() if r['TpTribItem'] is not None else "—")
+                sai = r['TribSaiItem']
+                sai = "—" if sai is None or pd.isna(sai) else str(int(sai)) if float(sai).is_integer() else str(sai)
+                trib_distribuicao.append({
+                    "label":     f"Trib. Saída {sai}" + (f" ({tp})" if tp not in ("—", "P") else ""),
+                    "tp_trib":   tp,
+                    "trib_sai":  sai,
+                    "qtd_itens": int(r['qtd_itens'] or 0),
+                })
+
+        itens_tributacao = []
+        df_itens = _res.get("itens", pd.DataFrame())
+        if df_itens is not None and not df_itens.empty:
+            for _, r in df_itens.iterrows():
+                sai = r['TribSaiItem']
+                sai = "—" if sai is None or pd.isna(sai) else str(int(sai)) if float(sai).is_integer() else str(sai)
+                itens_tributacao.append({
+                    "cod_item":      str(r['CodItem']).strip() if r['CodItem'] is not None else "—",
+                    "descricao":     (str(r['DescrItem']).strip() if r['DescrItem'] is not None else "—"),
+                    "marca":         (str(r['marca']).strip() if r['marca'] is not None else "—"),
+                    "qtd_vendida":   float(r['qtd_vendida'] or 0),
+                    "valor_vendido": float(r['valor_vendido'] or 0),
+                    "tp_trib":       (str(r['TpTribItem']).strip() if r['TpTribItem'] is not None else "—"),
+                    "trib_sai":      sai,
+                    "uf_trib":       (str(r['uf_trib']).strip() if r['uf_trib'] is not None else "—"),
+                })
+
+        # ── Regras PIS/COFINS configuradas ─────────────────────────────
+        pis_cofins = []
+        df_pc = _res.get("piscofins", pd.DataFrame())
+        if df_pc is not None and not df_pc.empty:
+            for _, r in df_pc.iterrows():
+                pis_cofins.append({
+                    "descricao":   str(r['descricao'] or "—").strip(),
+                    "cst_pis":     str(r['cst_pis'] or "—").strip(),
+                    "aliq_pis":    float(r['aliq_pis'] or 0),
+                    "cst_cofins":  str(r['cst_cofins'] or "—").strip(),
+                    "aliq_cofins": float(r['aliq_cofins'] or 0),
+                })
+
+        logger.info("[Imposto] analisar() concluído em %.1fs", time.time() - t0)
+        return {
+            "mes_referencia":    datetime.now().strftime("%m/%Y"),
+            "kpis":              kpis,
+            "kpis_ant":          kpis_ant,
+            "deltas":            deltas,
+            "icms_diario":       icms_diario,
+            "evolucao_mensal":   evolucao_mensal,
+            "por_cfop":          por_cfop,
+            "resumo_uf":         resumo_uf,
+            "cfop_evolucao":     cfop_evolucao,
+            "cfop_series":       cfop_series,
+            "top_nfs":           top_nfs,
+            "trib_distribuicao": trib_distribuicao,
+            "itens_tributacao":  itens_tributacao,
+            "pis_cofins":        pis_cofins,
+            "ultimo_update":     datetime.now().strftime("%H:%M:%S"),
+        }
+
+    def analisar_filtrado(self, filtros: dict) -> dict:
+        return self.resultado or self.analisar()
+
+
+# ──────────────────────────────────────────────────────────────────
 #  BOT CRM  — Funil de conversão usando TbOrcPedVnd (OrcPedVnd 1/2)
 # ──────────────────────────────────────────────────────────────────
 class BotCRM(BaseBot):
@@ -2427,6 +2596,65 @@ class BotCRM(BaseBot):
             {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
         ]
 
+        # ── CRM v4 · Carteira e oportunidades (2026-07-15) ────────
+        # Clientes ativos no mês — número REAL (substitui o proxy len(top10))
+        df_ativos = db.new_conn_query(f"""
+            SELECT COUNT(DISTINCT v.CodCli) AS ativos
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            WHERE v.DtVnd >= {_MES_INI} AND v.DtVnd < {_MES_FIM} {_EXCLUIR_PLANO}
+        """)
+        qtd_ativos_real = _safe_int(df_ativos, "ativos")
+
+        # Clientes NOVOS — primeira compra da HISTÓRIA dentro do mês corrente.
+        # (HAVING MIN(DtVnd) garante que todas as compras do cliente são deste mês,
+        #  então SUM(ValVndTotal) == valor do mês.)
+        df_novos = db.new_conn_query(f"""
+            SELECT v.CodCli,
+                MAX(v.NomeFantCli) AS nome_cliente,
+                MAX(v.Vendedor)    AS vendedor,
+                MIN(v.DtVnd)       AS primeira_compra,
+                SUM(v.ValVndTotal) AS valor_mes
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            GROUP BY v.CodCli
+            HAVING MIN(v.DtVnd) >= {_MES_INI}
+            ORDER BY valor_mes DESC
+        """)
+        logger.info("[CRM] clientes novos (1ª compra no mês): %d", len(df_novos))
+
+        # Novos CADASTROS no mês (TbCli.dthrcadcli) — clientes registrados, com ou sem compra
+        df_cad = db.new_conn_query(f"""
+            SELECT COUNT(*) AS n FROM Blue.dbo.TbCli WITH (NOLOCK)
+            WHERE dthrcadcli >= {_MES_INI} AND dthrcadcli < {_MES_FIM}
+        """)
+
+        # Orçamentos ABERTOS (follow-up) — OrcPedVnd=1 nos últimos 90 dias.
+        # Quando o orçamento converte ele passa a OrcPedVnd=2, então 1 = ainda aberto.
+        df_orc_ab = db.new_conn_query("""
+            SELECT TOP 100
+                o.NrOrcPedVnd,
+                o.DtOrcPedVnd,
+                DATEDIFF(day, o.DtOrcPedVnd, GETDATE()) AS dias_aberto,
+                o.ValTotalOrcPedVnd AS valor,
+                ISNULL(c.NomeFantCli, RTRIM(o.CodRedCtRecOrcPedVnd)) AS cliente,
+                ISNULL(vn.Vendedor,  RTRIM(o.VendOrcPedVnd))         AS vendedor
+            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+            LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK)
+                ON TRY_CAST(c.CodRedCt AS INT) = TRY_CAST(o.CodRedCtRecOrcPedVnd AS INT)
+            LEFT JOIN (
+                SELECT CodVend, MAX(Vendedor) AS Vendedor
+                FROM Blue.dbo.vmVndDoc WITH (NOLOCK) GROUP BY CodVend
+            ) vn ON vn.CodVend = o.VendOrcPedVnd
+            WHERE o.OrcPedVnd = 1
+              AND o.DtOrcPedVnd >= DATEADD(day, -90, GETDATE())
+            ORDER BY o.ValTotalOrcPedVnd DESC
+        """)
+        df_orc_tot = db.new_conn_query("""
+            SELECT COUNT(*) AS qtd, SUM(o.ValTotalOrcPedVnd) AS valor
+            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+            WHERE o.OrcPedVnd = 1
+              AND o.DtOrcPedVnd >= DATEADD(day, -90, GETDATE())
+        """)
+
         return {
             # KPIs
             "total_orcamentos":   _orc,
@@ -2442,6 +2670,14 @@ class BotCRM(BaseBot):
             "qtd_inativos":       len(df_inativos_v),
             "qtd_em_risco":       int((df_risco["dias_inativo"] >= DIAS_RISCO).sum()) if not df_risco.empty else 0,
             "qtd_ativos_mes":     len(df_top_cli),
+            # CRM v4 — carteira e oportunidades
+            "qtd_ativos_mes_real":  qtd_ativos_real,
+            "clientes_novos_qtd":   len(df_novos),
+            "clientes_novos_lista": df_novos.head(50).to_dict("records"),
+            "novos_cadastros_mes":  _safe_int(df_cad, "n"),
+            "orc_abertos_qtd":      _safe_int(df_orc_tot, "qtd"),
+            "orc_abertos_valor":    _safe_float(df_orc_tot, "valor"),
+            "orc_abertos_lista":    df_orc_ab.to_dict("records"),
             # Tabelas novas
             "ranking_vendedores":      df_ranking.to_dict("records"),
             "cancelados_por_vendedor": df_canc_vend.to_dict("records"),
@@ -2586,7 +2822,7 @@ class BotManager:
         if use_hub:
             self.bots: dict[str, BaseBot] = {
                 name: HubPollerBot(name)
-                for name in ("dashboard", "vendas", "estoque", "financeiro", "crm")
+                for name in ("dashboard", "vendas", "estoque", "financeiro", "crm", "imposto")
             }
         else:
             self.bots: dict[str, BaseBot] = {
@@ -2595,6 +2831,7 @@ class BotManager:
                 "estoque":    BotEstoque(),
                 "financeiro": BotFinanceiro(),
                 "crm":        BotCRM(),
+                "imposto":    BotImposto(),
             }
 
     def load_from_cache(self):
