@@ -1884,11 +1884,18 @@ class BotFinanceiro(BaseBot):
                 })
 
         # ── Return dict ───────────────────────────────────────────────────
+        _carteira_aberta = vlr_vencidos + vlr_a_vencer
         return {
             "qtd_total_aberto":  qtd_total_aberto,
             "qtd_vencidos":      qtd_vencidos,
             "qtd_a_vencer":      qtd_a_vencer,
             "qtd_recebido_mes":  qtd_recebido_mes,
+            # Valores em R$ (antes só existiam dentro do donut) + inadimplência
+            "vlr_total_aberto":  round(_carteira_aberta, 2),
+            "vlr_vencidos":      round(vlr_vencidos, 2),
+            "vlr_a_vencer":      round(vlr_a_vencer, 2),
+            "vlr_recebido_mes":  round(vlr_recebido_mes, 2),
+            "pct_inadimplencia": round(vlr_vencidos / _carteira_aberta * 100, 1) if _carteira_aberta > 0 else 0.0,
             "donut_status": [
                 {"status": "Concluido", "qtd": qtd_recebido_mes, "valor": round(vlr_recebido_mes, 2)},
                 {"status": "AVencer",   "qtd": qtd_a_vencer,     "valor": round(vlr_a_vencer, 2)},

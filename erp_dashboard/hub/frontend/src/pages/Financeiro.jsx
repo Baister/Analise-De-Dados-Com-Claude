@@ -537,11 +537,19 @@ export default function Financeiro({ refreshTrigger }) {
 
       {/* ── Visão Geral ──────────────────────────────────────────── */}
       <SectionLabel first>Visão Geral — Contas a Receber</SectionLabel>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
-        <KpiCard label="Total a Receber"   value={String(qtd_total_aberto)} sub="títulos em aberto"  variant="default" topBorder="#3b82f6" />
-        <KpiCard label="Títulos Vencidos"  value={String(qtd_vencidos)}     sub="em atraso"          variant="error"   topBorder="#ef4444" />
-        <KpiCard label="Próximos a Vencer" value={String(qtd_a_vencer)}     sub="próximos 30 dias"   variant="warning" topBorder="#f59e0b" />
-        <KpiCard label="Recebido no Mês"   value={String(qtd_recebido_mes)} sub="títulos recebidos"  variant="success" topBorder="#22c55e" />
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5">
+        <KpiCard label="Total a Receber"   value={String(qtd_total_aberto)}
+          sub={`${fmtR(data?.vlr_total_aberto)} em aberto`}      variant="default" topBorder="#3b82f6" />
+        <KpiCard label="Títulos Vencidos"  value={String(qtd_vencidos)}
+          sub={`${fmtR(data?.vlr_vencidos)} em atraso`}          variant="error"   topBorder="#ef4444" />
+        <KpiCard label="A Vencer"          value={String(qtd_a_vencer)}
+          sub={`${fmtR(data?.vlr_a_vencer)} na carteira`}        variant="warning" topBorder="#f59e0b" />
+        <KpiCard label="Recebido no Mês"   value={String(qtd_recebido_mes)}
+          sub={`${fmtR(data?.vlr_recebido_mes)} recebidos`}      variant="success" topBorder="#22c55e" />
+        <KpiCard label="Inadimplência"     value={`${(data?.pct_inadimplencia ?? 0).toFixed(1)}%`.replace('.', ',')}
+          sub="vencido ÷ carteira aberta"
+          valueColor={(data?.pct_inadimplencia ?? 0) < 5 ? '#4ade80' : (data?.pct_inadimplencia ?? 0) <= 15 ? '#fbbf24' : '#f87171'}
+          topBorder={(data?.pct_inadimplencia ?? 0) < 5 ? '#22c55e' : (data?.pct_inadimplencia ?? 0) <= 15 ? '#f59e0b' : '#ef4444'} />
       </div>
 
       {/* ── Análise ──────────────────────────────────────────────── */}
