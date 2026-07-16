@@ -898,6 +898,16 @@ class BotVendas(BaseBot):
             FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
             WHERE v.DtVnd >= {_MES_INI} AND v.DtVnd < {_MES_FIM} {_EXCLUIR_PLANO}
         """,
+            # Ritmo do Mês: venda líquida por dia (mesma base do kpi_venda_liquida —
+            # o acumulado do último dia FECHA com o KPI usado no % da Meta)
+            "fat_diario": f"""
+            SELECT CONVERT(date, v.DtVnd) AS dia,
+                SUM(v.ValVndTotal) AS faturamento
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            WHERE v.DtVnd >= {_MES_INI} AND v.DtVnd < {_MES_FIM} {_EXCLUIR_PLANO}
+            GROUP BY CONVERT(date, v.DtVnd)
+            ORDER BY dia
+        """,
             "devk": f"""
             SELECT SUM(d.ValTotItem) AS devolucoes_total
             FROM Blue.dbo.vmMetricasMotivoDevItem d WITH (NOLOCK)
@@ -951,6 +961,13 @@ class BotVendas(BaseBot):
         df_devk        = _res.get("devk",        pd.DataFrame())
         df_canck       = _res.get("canck",       pd.DataFrame())
         df_kpi_marca   = _res.get("kpi_marca",   pd.DataFrame())
+        df_fat_diario  = _res.get("fat_diario",  pd.DataFrame())
+
+        fat_diario_mes = []
+        if df_fat_diario is not None and not df_fat_diario.empty:
+            fat_diario_mes = [{"dia": str(r["dia"])[:10],
+                               "faturamento": float(r["faturamento"] or 0)}
+                              for _, r in df_fat_diario.iterrows()]
 
         _tim: dict = {}
         if not df_itens_marca.empty:
@@ -1132,6 +1149,7 @@ class BotVendas(BaseBot):
             "top_itens_por_marca":   _tim,
             "top_itens_por_vendedor": _tiv,
             "venda_hoje_vendedor":   df_hoje.to_dict("records"),
+            "fat_diario_mes":        fat_diario_mes,
             "ultimo_update":         datetime.now().strftime("%H:%M:%S"),
         }
 

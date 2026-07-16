@@ -4,9 +4,10 @@ import { useMetas } from '../hooks/useMetas';
 import FilterBar from '../components/FilterBar';
 import BarChart from '../charts/BarChart';
 import PieChart from '../charts/PieChart';
+import LineChart from '../charts/LineChart';
 import { brl, pct, shortBrl } from '../utils/format';
 import { getUniqueValues } from '../utils/filters';
-import { countBusinessDaysSP, remainingBusinessDaysSP } from '../utils/businessDays';
+import { countBusinessDaysSP, remainingBusinessDaysSP, getHolidaysSP } from '../utils/businessDays';
 
 function SectionHeader({ title, subtitle }) {
   return (
@@ -74,6 +75,34 @@ export default function Vendas({ refreshTrigger }) {
     const now = new Date();
     return remainingBusinessDaysSP(now.getFullYear(), now.getMonth() + 1);
   }, []);
+
+  /* ── Ritmo do Mês: acumulado diário vs meta proporcional (dias úteis SP) ── */
+  const metaTotal = parseFloat(metas?.meta_mensal_total) || 0;
+  const ritmoMes = useMemo(() => {
+    const serie = data?.fat_diario_mes ?? [];
+    if (!serie.length) return [];
+    const now = new Date();
+    const y = now.getFullYear(), m = now.getMonth() + 1;
+    const totalUteis = countBusinessDaysSP(y, m);
+    const holidays = getHolidaysSP(y);
+    const pad = n => String(n).padStart(2, '0');
+    const mapa = Object.fromEntries(serie.map(r => [r.dia, r.faturamento]));
+    const ultimoDia = serie[serie.length - 1].dia;
+    const diasNoMes = new Date(y, m, 0).getDate();
+    let acum = 0, uteis = 0;
+    const out = [];
+    for (let d = 1; d <= diasNoMes; d++) {
+      const ds = `${y}-${pad(m)}-${pad(d)}`;
+      if (ds > ultimoDia) break;
+      const dow = new Date(y, m - 1, d).getDay();
+      if (dow >= 1 && dow <= 5 && !holidays.has(ds)) uteis++;
+      acum += mapa[ds] ?? 0;
+      const ponto = { dia: `${pad(d)}/${pad(m)}`, acumulado: Math.round(acum * 100) / 100 };
+      if (metaTotal > 0) ponto.ritmo_meta = Math.round(metaTotal * uteis / totalUteis * 100) / 100;
+      out.push(ponto);
+    }
+    return out;
+  }, [data, metaTotal]);
 
   const metaDiariaMap = useMemo(() => {
     return Object.fromEntries(
@@ -344,6 +373,26 @@ export default function Vendas({ refreshTrigger }) {
         <StatCard label="Nº Devoluções"  value={kpiAtivo.qtd_vendas_dev}   color="#78716c" count small />
         <StatCard label="Clientes Ativos" value={kpis.clientes_ativos}     color="#06b6d4" count small />
         <StatCard label="Total Marcas"   value={marcasMes.length}          color="#a855f7" count small />
+      </div>
+
+      {/* ── Ritmo do Mês — Acumulado vs Meta (visão da empresa) ───── */}
+      <div className="bg-card border border-card_border rounded-xl p-4">
+        <SectionHeader
+          title="Ritmo do Mês — Acumulado vs Meta"
+          subtitle={metaTotal > 0
+            ? `meta de ${brl(metaTotal)} distribuída pelos dias úteis (SP) · visão da empresa`
+            : 'configure a Meta Mensal Total em Configurações para ver a linha de ritmo'}
+        />
+        <LineChart
+          data={ritmoMes}
+          xKey="dia"
+          lines={metaTotal > 0
+            ? [{ key: 'acumulado',  label: 'Acumulado',     formatter: shortBrl },
+               { key: 'ritmo_meta', label: 'Ritmo da Meta', formatter: shortBrl }]
+            : [{ key: 'acumulado',  label: 'Acumulado',     formatter: shortBrl }]}
+          colors={['#1f6feb', '#8b949e']}
+          height={220}
+        />
       </div>
 
       {/* ── Filtros ────────────────────────────────────────────────── */}
