@@ -1150,6 +1150,12 @@ class BotVendas(BaseBot):
             "top_itens_por_vendedor": _tiv,
             "venda_hoje_vendedor":   df_hoje.to_dict("records"),
             "fat_diario_mes":        fat_diario_mes,
+            # Aliases legadas do desktop (ui/app.py TelaVendas) — contrato aditivo
+            "faturamento_total":     venda_bruta,
+            "qtd_vendas":            _safe_int(df_kpi, "qtd_vendas"),
+            "total_devolucoes":      devolucao,
+            "por_marca":             df_marca.to_dict("records"),
+            "por_vendedor":          vend_records,
             "ultimo_update":         datetime.now().strftime("%H:%M:%S"),
         }
 
@@ -1304,7 +1310,10 @@ class BotEstoque(BaseBot):
                 SUM(CASE WHEN i.QtdItem > 0 THEN i.QtdItem  ELSE 0 END) AS qtd_vendas_brutas_90d,
                 SUM(CASE WHEN i.QtdItem < 0 THEN -i.QtdItem ELSE 0 END) AS qtd_devolvida_90d
             FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
+            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK)
+                ON i.NrDoc = d.NrDoc AND i.NSUDoc = d.NSUDoc
             WHERE i.DtVnd >= DATEADD(day, -90, GETDATE())
+              AND d.Cancelado = '' AND i.Fat = 1
               AND i.CodPlanoVnd NOT IN ('{_pl}')
             GROUP BY i.CodItem
         """
@@ -1693,7 +1702,7 @@ class BotFinanceiro(BaseBot):
 
         if not df_tbrec_dist.empty:
             for _, row in df_tbrec_dist.iterrows():
-                tp  = int(row["TpCobrCtRec"]) if row["TpCobrCtRec"] is not None else -1
+                tp  = int(row["TpCobrCtRec"]) if not pd.isna(row["TpCobrCtRec"]) else -1
                 qtd = int(row["qtd"])
                 vlr = float(row["vlr"]) if row["vlr"] is not None else 0.0
                 qtd_recebido_mes += qtd
@@ -2203,7 +2212,11 @@ class BotImposto(BaseBot):
                 MAX(t.TribSaiItem)   AS TribSaiItem,
                 MAX(t.CodUFTribItem) AS uf_trib
             FROM Blue.dbo.vmVndItemDoc i WITH (NOLOCK)
-            LEFT JOIN Blue.dbo.TbTribItem t WITH (NOLOCK) ON t.CodItem = i.CodItem
+            LEFT JOIN (
+                SELECT CodItem, MAX(TpTribItem) AS TpTribItem,
+                       MAX(TribSaiItem) AS TribSaiItem, MAX(CodUFTribItem) AS CodUFTribItem
+                FROM Blue.dbo.TbTribItem WITH (NOLOCK) GROUP BY CodItem
+            ) t ON t.CodItem = i.CodItem
             WHERE i.DtVnd >= {_MES_INI} AND i.DtVnd < {_MES_FIM}
               AND i.CodPlanoVnd NOT IN ('{_pl}')
             GROUP BY i.CodItem

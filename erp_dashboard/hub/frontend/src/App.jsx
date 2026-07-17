@@ -1,5 +1,9 @@
 import { useState, useCallback, useMemo, Suspense, lazy } from 'react';
 import { ROUTES } from './routes';
+
+// lazy() UMA vez por rota (escopo de módulo) — recriar a cada render força
+// unmount/remount da página ativa a cada evento SSE, perdendo filtros/estado.
+const LAZY_PAGES = Object.fromEntries(ROUTES.map(r => [r.key, lazy(r.component)]));
 import LoginScreen from './components/LoginScreen';
 import Sidebar from './components/Sidebar';
 import { useSSE } from './hooks/useSSE';
@@ -39,7 +43,7 @@ export default function App() {
 
   // Aba ativa precisa ser uma das visíveis (fallback p/ a primeira permitida)
   const activeRoute = visibleRoutes.find(r => r.key === activePage) || visibleRoutes[0];
-  const PageComponent = lazy(activeRoute.component);
+  const PageComponent = LAZY_PAGES[activeRoute.key];
 
   return (
     <div className="flex h-screen bg-bg overflow-hidden">

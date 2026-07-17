@@ -3,6 +3,7 @@ import asyncio
 import concurrent.futures as _cf
 import json
 import logging
+import math
 import pathlib
 import re as _re
 import secrets
@@ -153,10 +154,12 @@ def get_metas(_: str = Depends(verify_token)):
 @app.post("/metas")
 def post_metas(payload: MetasPayload, token: str = Depends(verify_token)):
     _require_tab(token, "configuracoes")
-    if payload.meta_mensal_total < 0:
-        raise HTTPException(status_code=422, detail="meta_mensal_total deve ser >= 0")
-    if any(v < 0 for v in payload.metas_individuais.values()):
-        raise HTTPException(status_code=422, detail="Valores individuais devem ser >= 0")
+    # NaN/Infinity passam por 'v < 0' (NaN < 0 é False) e envenenariam o
+    # metas.json → 500 permanente no GET /metas. Rejeitar não-finitos.
+    if not math.isfinite(payload.meta_mensal_total) or payload.meta_mensal_total < 0:
+        raise HTTPException(status_code=422, detail="meta_mensal_total deve ser um número >= 0")
+    if any((not math.isfinite(v)) or v < 0 for v in payload.metas_individuais.values()):
+        raise HTTPException(status_code=422, detail="Valores individuais devem ser números >= 0")
     data = {
         "meta_mensal_total": payload.meta_mensal_total,
         "metas_individuais": payload.metas_individuais,

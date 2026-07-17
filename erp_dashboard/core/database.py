@@ -29,8 +29,10 @@ class DatabaseManager:
             f"Connection Timeout={c['timeout']};"
         )
 
-    def connect(self) -> bool:
-        for delay in [0] + _RETRY_DELAYS:
+    def connect(self, retry: bool = True) -> bool:
+        # retry=False: UMA tentativa sem sleeps — usado sob o _lock de query()
+        # para não travar hub/bots/desktop em cascata durante queda do banco.
+        for delay in ([0] + _RETRY_DELAYS) if retry else [0]:
             if delay:
                 logger.warning("Aguardando %ds antes de reconectar...", delay)
                 time.sleep(delay)
@@ -67,15 +69,17 @@ class DatabaseManager:
                 return False
         return True
 
-    def ensure_connected(self) -> bool:
+    def ensure_connected(self, retry: bool = True) -> bool:
         if self.is_connected():
             return True
         logger.warning("Reconectando...")
-        return self.connect()
+        return self.connect(retry=retry)
 
     def query(self, sql: str, params=None) -> pd.DataFrame:
         with _lock:
-            if not self.ensure_connected():
+            if not self.ensure_connected(retry=False):
+                # Contrato da casa: falha de conexão DEVE marcar last_error
+                self.last_error = "sem conexao com o banco (ensure_connected falhou)"
                 return pd.DataFrame()
             try:
                 cursor = self._conn.cursor()
@@ -125,6 +129,7 @@ class DatabaseManager:
                     logger.warning("new_conn_query: resultado truncado em %d linhas (havia %d)",
                                    cap, len(df))
                     df = df.head(cap)
+                self.last_error = ""
                 return df
             finally:
                 conn.close()
