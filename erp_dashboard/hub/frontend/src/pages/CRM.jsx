@@ -421,9 +421,9 @@ export default function CRM({ refreshTrigger }) {
       <SectionLabel first>Visão Geral do Mês</SectionLabel>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
         <KpiCard label="Taxa de Conversão" value={pct(taxaConv)} valueColor={taxaColor}
-          sub={deltaSub(deltaTaxa, 'pp') ?? 'docs faturados ÷ docs do mês'} topBorder={AZUL} />
+          sub={deltaSub(deltaTaxa, 'pp') ?? 'pedidos fechados ÷ orçamentos do mês'} topBorder={AZUL} />
         <KpiCard label="Pipeline do Mês (R$)" value={brl(pipeline)}
-          sub={deltaSub(deltaPipe != null ? Math.round(deltaPipe / 1000) : null, 'k') ?? 'valor em documentos no mês'} topBorder={VERDE} />
+          sub={deltaSub(deltaPipe != null ? Math.round(deltaPipe / 1000) : null, 'k') ?? 'orçamentos em aberto no mês'} topBorder={VERDE} />
         <KpiCard label="Clientes Ativos" value={fmtInt(data?.qtd_ativos_mes_real)}
           sub={`compraram no mês${globalHint}`} topBorder={AZUL} />
         <KpiCard label="Clientes Novos" value={fmtInt(data?.clientes_novos_qtd)}
@@ -442,7 +442,7 @@ export default function CRM({ refreshTrigger }) {
           <CardTitle right={selectedVendedor ? 'vendedor selecionado' : 'mês atual'}>Funil do Mês</CardTitle>
           <FunnelBars etapas={data?.funil_etapas ?? []} />
           <p className="text-subtext text-[10px] mt-2 opacity-70">
-            Propostas = documentos do mês · Fechadas = faturados · Em negociação = restante (sem cancelados).
+            Fonte: TbOrcPedVnd por data de emissão · Propostas = orçamentos movimentados no mês · Em Negociação = ainda em aberto (OrcPedVnd=1) · Fechadas = viraram pedido/venda (OrcPedVnd=2).
           </p>
         </Card>
         <Card>

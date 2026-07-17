@@ -2444,41 +2444,41 @@ class BotCRM(BaseBot):
         # Usa vmVndDoc+vwVndDoc (mesmo padrão de df_ranking) para evitar
         # taxa >100% que ocorria com TbOrcPedVnd (orçamentos criados em meses
         # anteriores aparecem como OrcPedVnd=2 no mês atual, inflando conversões).
-        df_conv = db.new_conn_query(f"""
+        # Funil/KPIs de orçamento na FONTE REAL: TbOrcPedVnd por DtOrcPedVnd
+        # (validado contra o BI do usuário em 17/07/2026: OrcPedVnd=1 → 952/
+        # bateu com o gabarito de referência (diferença de 4 conversões pós-conferência)
+        # ocorridas entre o print e a medição — banco vivo).
+        #   emitidos (IN 1,2) = em_aberto (=1) + convertidos (=2) → taxa ≤ 100%.
+        #   valor_orcado = SUM dos EM ABERTO (pipeline real de orçamentos).
+        def _sql_orc_kpis(ini: str, fim: str) -> str:
+            return f"""
             SELECT
-                COUNT(DISTINCT v.NrDoc) AS total_orcamentos,
-                COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
-                                    THEN v.NrDoc END) AS total_convertidos,
-                CAST(COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
-                                         THEN v.NrDoc END) AS FLOAT) /
-                    NULLIF(COUNT(DISTINCT v.NrDoc), 0) * 100 AS taxa_conversao_pct,
-                SUM(v.ValVndTotal) AS valor_orcado,
-                SUM(CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
-                         THEN v.ValVndTotal ELSE 0 END) AS valor_convertido
-            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE v.DtVnd >= {_MES_INI}
-              AND v.DtVnd <  {_MES_FIM}
-              {_EXCLUIR_PLANO}
-        """)
-        logger.info("[CRM] df_conv: %d linhas | valor_orcado=%s%s",
-                    len(df_conv),
+                COUNT(*)                                    AS total_orcamentos,
+                COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS total_convertidos,
+                COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END) AS em_aberto,
+                CAST(COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS FLOAT)
+                    / NULLIF(COUNT(*), 0) * 100             AS taxa_conversao_pct,
+                SUM(CASE WHEN o.OrcPedVnd = 1 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_orcado,
+                SUM(CASE WHEN o.OrcPedVnd = 2 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido
+            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+            WHERE o.OrcPedVnd IN (1, 2)
+              AND o.DtOrcPedVnd >= {ini} AND o.DtOrcPedVnd < {fim}
+        """
+
+        df_conv = db.new_conn_query(_sql_orc_kpis(_MES_INI, _MES_FIM))
+        logger.info("[CRM] df_conv (TbOrcPedVnd): emitidos=%s abertos=%s | valor_orcado=%s%s",
+                    df_conv["total_orcamentos"].iloc[0] if not df_conv.empty else "N/A",
+                    df_conv["em_aberto"].iloc[0] if not df_conv.empty else "N/A",
                     df_conv["valor_orcado"].iloc[0] if not df_conv.empty else "N/A",
                     f" | erro: {db.last_error}" if db.last_error else "")
 
-        # ── KPIs do mês anterior (para deltas) ───────────────────
-        df_anterior = db.query(f"""
-            SELECT
-                COUNT(DISTINCT v.NrDoc) AS total_orc_ant,
-                COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
-                                    THEN v.NrDoc END) AS total_conv_ant,
-                SUM(v.ValVndTotal) AS valor_orc_ant
-            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            WHERE v.DtVnd >= {_MES_INI_ANT}
-              AND v.DtVnd <  {_MES_FIM_ANT}
-              {_EXCLUIR_PLANO}
-        """)
+        # ── KPIs do mês anterior (para deltas — mesma base TbOrcPedVnd) ──
+        _df_ant = db.new_conn_query(_sql_orc_kpis(_MES_INI_ANT, _MES_FIM_ANT))
+        df_anterior = _df_ant.rename(columns={
+            "total_orcamentos": "total_orc_ant",
+            "total_convertidos": "total_conv_ant",
+            "valor_orcado": "valor_orc_ant",
+        }) if not _df_ant.empty else _df_ant
 
         # ── Cancelamentos do mês atual ────────────────────────────
         # vwVndDoc.Cancelado = '*' é o discriminador direto de cancelados.
@@ -2712,7 +2712,9 @@ class BotCRM(BaseBot):
         _taxa = round(_safe_float(df_conv, "taxa_conversao_pct"), 1)
         _tick = round(_vlrc / _conv, 2) if _conv > 0 else 0.0
         _canc = _safe_int(df_cancelados, "cancelados") if not df_cancelados.empty else 0
-        _ativ = max(_orc - _conv - _canc, 0)
+        # Em Negociação = orçamentos EM ABERTO (OrcPedVnd=1) — contagem direta da
+        # TbOrcPedVnd (952/R$4,0M em 17/07), não mais derivada por subtração.
+        _ativ = _safe_int(df_conv, "em_aberto")
         _orc_ant  = _safe_int(df_anterior, "total_orc_ant")
         _conv_ant = _safe_int(df_anterior, "total_conv_ant")
         _vlro_ant = _safe_float(df_anterior, "valor_orc_ant")
@@ -2854,22 +2856,43 @@ class BotCRM(BaseBot):
             params.append(f"%{filtros['marca'][:100]}%")
 
         where = " AND ".join(parts)
-        df_conv = db.new_conn_query(f"""
-            SELECT
-                COUNT(DISTINCT v.NrDoc) AS total_orcamentos,
-                COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
-                                    THEN v.NrDoc END) AS total_convertidos,
-                CAST(COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
-                                         THEN v.NrDoc END) AS FLOAT) /
-                    NULLIF(COUNT(DISTINCT v.NrDoc), 0) * 100 AS taxa_conversao_pct,
-                SUM(v.ValVndTotal) AS valor_orcado,
-                SUM(CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
-                         THEN v.ValVndTotal ELSE 0 END) AS valor_convertido
-            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
-            {marca_join}
-            WHERE {where} {_EXCLUIR_PLANO}
-        """, params)
+        if has_vendedor and not has_marca:
+            # Mesma base do funil global (TbOrcPedVnd); vendedor via VendOrcPedVnd
+            # mapeado por nome→CodVend (vmVndDoc, janela de 24m p/ não varrer tudo).
+            df_conv = db.new_conn_query(f"""
+                SELECT
+                    COUNT(*)                                    AS total_orcamentos,
+                    COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS total_convertidos,
+                    COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END) AS em_aberto,
+                    CAST(COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS FLOAT)
+                        / NULLIF(COUNT(*), 0) * 100             AS taxa_conversao_pct,
+                    SUM(CASE WHEN o.OrcPedVnd = 1 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_orcado,
+                    SUM(CASE WHEN o.OrcPedVnd = 2 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido
+                FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+                WHERE o.OrcPedVnd IN (1, 2)
+                  AND o.DtOrcPedVnd >= {_MES_INI} AND o.DtOrcPedVnd < {_MES_FIM}
+                  AND o.VendOrcPedVnd IN (
+                      SELECT DISTINCT v.CodVend FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                      WHERE v.DtVnd >= DATEADD(month, -24, GETDATE()) AND v.Vendedor LIKE ?
+                  )
+            """, [f"%{filtros['vendedor'][:100]}%"])
+        else:
+            df_conv = db.new_conn_query(f"""
+                SELECT
+                    COUNT(DISTINCT v.NrDoc) AS total_orcamentos,
+                    COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                        THEN v.NrDoc END) AS total_convertidos,
+                    CAST(COUNT(DISTINCT CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                                             THEN v.NrDoc END) AS FLOAT) /
+                        NULLIF(COUNT(DISTINCT v.NrDoc), 0) * 100 AS taxa_conversao_pct,
+                    SUM(v.ValVndTotal) AS valor_orcado,
+                    SUM(CASE WHEN d.TipoMovimento = '1.1-Docs Com Baixa / Com Faturamento'
+                             THEN v.ValVndTotal ELSE 0 END) AS valor_convertido
+                FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                INNER JOIN Blue.dbo.vwVndDoc d WITH (NOLOCK) ON v.NrDoc = d.NrDoc AND v.NSUDoc = d.NSUDoc
+                {marca_join}
+                WHERE {where} {_EXCLUIR_PLANO}
+            """, params)
 
         logger.info("[CRM filtrado] iniciando query | filtros=%s", filtros)
 
@@ -2902,7 +2925,9 @@ class BotCRM(BaseBot):
         logger.info("[CRM filtrado] filtros=%s | orc=%d conv=%d taxa=%.1f%% orcado=%.0f%s",
                     filtros, _orc, _conv, _taxa, _vlro,
                     f" | erro: {db.last_error}" if db.last_error else "")
-        _ativ = max(_orc - _conv - _canc, 0)
+        _ativ = (_safe_int(df_conv, "em_aberto")
+                 if not df_conv.empty and "em_aberto" in df_conv.columns
+                 else max(_orc - _conv - _canc, 0))
         _total_d = _orc if _orc > 0 else 1
 
         base["total_orcamentos"]   = _orc
