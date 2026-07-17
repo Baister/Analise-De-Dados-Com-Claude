@@ -45,7 +45,7 @@ function CardTitle({ children, right }) {
 }
 
 // ── Funil do mês — barras horizontais proporcionais ───────────────
-const FUNIL_COLORS = { 'Propostas': AZUL, 'Em Negociação': AMBAR, 'Fechadas': VERDE };
+const FUNIL_COLORS = { 'Em Negociação': AMBAR, 'Fechadas': VERDE, 'Faturadas': AZUL };
 function FunnelBars({ etapas }) {
   if (!etapas?.length) return <p className="text-subtext text-sm text-center py-6">Sem dados</p>;
   return (
@@ -421,7 +421,7 @@ export default function CRM({ refreshTrigger }) {
       <SectionLabel first>Visão Geral do Mês</SectionLabel>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
         <KpiCard label="Taxa de Conversão" value={pct(taxaConv)} valueColor={taxaColor}
-          sub={deltaSub(deltaTaxa, 'pp') ?? 'pedidos fechados ÷ orçamentos do mês'} topBorder={AZUL} />
+          sub={deltaSub(deltaTaxa, 'pp') ?? 'faturamento líquido ÷ valor em negociação'} topBorder={AZUL} />
         <KpiCard label="Pipeline do Mês (R$)" value={brl(pipeline)}
           sub={deltaSub(deltaPipe != null ? Math.round(deltaPipe / 1000) : null, 'k') ?? 'orçamentos em aberto no mês'} topBorder={VERDE} />
         <KpiCard label="Clientes Ativos" value={fmtInt(data?.qtd_ativos_mes_real)}
@@ -442,7 +442,7 @@ export default function CRM({ refreshTrigger }) {
           <CardTitle right={selectedVendedor ? 'vendedor selecionado' : 'mês atual'}>Funil do Mês</CardTitle>
           <FunnelBars etapas={data?.funil_etapas ?? []} />
           <p className="text-subtext text-[10px] mt-2 opacity-70">
-            Fonte: TbOrcPedVnd por data de emissão · Propostas = orçamentos movimentados no mês · Em Negociação = ainda em aberto (OrcPedVnd=1) · Fechadas = viraram pedido/venda (OrcPedVnd=2).
+            Fonte: TbOrcPedVnd por emissão (universo = movimentados no mês, OrcPedVnd 1+2) · Em Negociação = em aberto (=1) · Fechadas = viraram pedido (=2) · Faturadas = fechadas com NF emitida (Fat=1). % sobre o universo do mês.
           </p>
         </Card>
         <Card>

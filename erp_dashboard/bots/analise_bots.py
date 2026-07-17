@@ -2456,11 +2456,16 @@ class BotCRM(BaseBot):
                 COUNT(*)                                    AS total_orcamentos,
                 COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS total_convertidos,
                 COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END) AS em_aberto,
-                CAST(COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS FLOAT)
-                    / NULLIF(COUNT(*), 0) * 100             AS taxa_conversao_pct,
+                COUNT(nf.nr)                                AS faturadas,
                 SUM(CASE WHEN o.OrcPedVnd = 1 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_orcado,
                 SUM(CASE WHEN o.OrcPedVnd = 2 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido
             FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+            LEFT JOIN (
+                SELECT DISTINCT TRY_CAST(n.NrOrcPedVnd AS INT) AS nr
+                FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
+                WHERE n.DataHoraCanc IS NULL AND n.Fat = 1
+                  AND n.NrOrcPedVnd IS NOT NULL
+            ) nf ON nf.nr = TRY_CAST(o.NrOrcPedVnd AS INT)
             WHERE o.OrcPedVnd IN (1, 2)
               AND o.DtOrcPedVnd >= {ini} AND o.DtOrcPedVnd < {fim}
         """
@@ -2479,6 +2484,17 @@ class BotCRM(BaseBot):
             "total_convertidos": "total_conv_ant",
             "valor_orcado": "valor_orc_ant",
         }) if not _df_ant.empty else _df_ant
+
+        # Faturamento líquido (mesma base do Dashboard/Vendas) para a nova taxa:
+        # Taxa de Conversão = fat_liq do mês ÷ valor EM NEGOCIAÇÃO (definição do usuário)
+        def _sql_fatliq(ini: str, fim: str) -> str:
+            return f"""
+            SELECT SUM(v.ValVndTotal) AS fat_liq
+            FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+            WHERE v.DtVnd >= {ini} AND v.DtVnd < {fim} {_EXCLUIR_PLANO}
+        """
+        _fat_liq     = _safe_float(db.new_conn_query(_sql_fatliq(_MES_INI, _MES_FIM)), "fat_liq")
+        _fat_liq_ant = _safe_float(db.new_conn_query(_sql_fatliq(_MES_INI_ANT, _MES_FIM_ANT)), "fat_liq")
 
         # ── Cancelamentos do mês atual ────────────────────────────
         # vwVndDoc.Cancelado = '*' é o discriminador direto de cancelados.
@@ -2709,7 +2725,10 @@ class BotCRM(BaseBot):
         _conv = _safe_int(df_conv, "total_convertidos")
         _vlro = _safe_float(df_conv, "valor_orcado")
         _vlrc = _safe_float(df_conv, "valor_convertido")
-        _taxa = round(_safe_float(df_conv, "taxa_conversao_pct"), 1)
+        _fatu = _safe_int(df_conv, "faturadas")
+        # Taxa de Conversão (definição do usuário, 17/07): faturamento líquido
+        # do mês ÷ valor total EM NEGOCIAÇÃO (orçamentos em aberto)
+        _taxa = round(_fat_liq / _vlro * 100, 1) if _vlro > 0 else 0.0
         _tick = round(_vlrc / _conv, 2) if _conv > 0 else 0.0
         _canc = _safe_int(df_cancelados, "cancelados") if not df_cancelados.empty else 0
         # Em Negociação = orçamentos EM ABERTO (OrcPedVnd=1) — contagem direta da
@@ -2718,7 +2737,7 @@ class BotCRM(BaseBot):
         _orc_ant  = _safe_int(df_anterior, "total_orc_ant")
         _conv_ant = _safe_int(df_anterior, "total_conv_ant")
         _vlro_ant = _safe_float(df_anterior, "valor_orc_ant")
-        _taxa_ant = round((_conv_ant / _orc_ant * 100) if _orc_ant > 0 else 0.0, 1)
+        _taxa_ant = round(_fat_liq_ant / _vlro_ant * 100, 1) if _vlro_ant > 0 else 0.0
         _delta_taxa  = round(_taxa - _taxa_ant, 1)
         _delta_vlro  = round(_vlro - _vlro_ant, 2)
         _total_d = _orc if _orc > 0 else 1
@@ -2727,10 +2746,13 @@ class BotCRM(BaseBot):
             {"status": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
             {"status": "Cancelados",    "qtd": _canc, "pct": round(_canc / _total_d * 100, 1)},
         ]
+        # Funil (definição do usuário, 17/07): Em Negociação (em aberto, do
+        # universo movimentado 1+2) · Fechadas (=2) · FATURADAS (fechadas com
+        # NF Fat=1 vinculada via TbNFVnd.NrOrcPedVnd). % sobre o universo.
         _funil_etapas = [
-            {"etapa": "Propostas",     "qtd": _orc,  "pct": 100},
             {"etapa": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
             {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
+            {"etapa": "Faturadas",     "qtd": _fatu, "pct": round(_fatu / _total_d * 100, 1)},
         ]
 
         # ── CRM v4 · Carteira e oportunidades (2026-07-15) ────────
