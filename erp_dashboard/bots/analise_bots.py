@@ -2960,6 +2960,130 @@ class BotCRM(BaseBot):
 
 
 # ──────────────────────────────────────────────────────────────────
+#  BOT CLIENTES (carteira) — análise AGREGADA de todos os clientes
+#  (a aba "Cliente" singular é o perfil 360º individual, sob demanda)
+# ──────────────────────────────────────────────────────────────────
+class BotClientes(BaseBot):
+    """Carteira: segmentação por recência, Curva ABC de clientes (receita 12m),
+    concentração, evolução de ativos/mês e top clientes. 3 consultas paralelas
+    (somente leitura). name == tab key 'cliente_comportamento'."""
+
+    def __init__(self):
+        super().__init__("cliente_comportamento")
+
+    def analisar(self) -> dict:
+        t0 = time.time()
+        sqls = {
+            "base": f"""
+                SELECT v.CodCli, MAX(v.NomeFantCli) AS nome,
+                    COUNT(DISTINCT v.NrDoc) AS pedidos,
+                    SUM(v.ValVndTotal)      AS receita,
+                    MAX(v.DtVnd)            AS ultima_compra
+                FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                WHERE v.DtVnd >= DATEADD(month, -12, GETDATE()) {_EXCLUIR_PLANO}
+                GROUP BY v.CodCli
+            """,
+            "evolucao": f"""
+                SELECT YEAR(v.DtVnd) AS ano, MONTH(v.DtVnd) AS mes,
+                    COUNT(DISTINCT v.CodCli) AS ativos,
+                    SUM(v.ValVndTotal)       AS receita
+                FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                WHERE v.DtVnd >= DATEADD(month, -12, GETDATE()) {_EXCLUIR_PLANO}
+                GROUP BY YEAR(v.DtVnd), MONTH(v.DtVnd)
+                ORDER BY ano, mes
+            """,
+            "novos": f"""
+                SELECT COUNT(*) AS novos FROM (
+                    SELECT v.CodCli FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                    GROUP BY v.CodCli
+                    HAVING MIN(v.DtVnd) >= {_MES_INI}
+                ) t
+            """,
+        }
+        _res: dict = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            futs = {pool.submit(db.new_conn_query, q, None, 30000): k for k, q in sqls.items()}
+            for f in concurrent.futures.as_completed(futs):
+                k = futs[f]
+                try:
+                    _res[k] = f.result()
+                except Exception as e:
+                    logger.error("[Clientes] Erro paralelo [%s]: %s", k, e)
+                    _res[k] = pd.DataFrame()
+
+        df = _res.get("base", pd.DataFrame())
+        _now = datetime.now().strftime("%H:%M:%S")
+        if df is None or df.empty:
+            return {"kpis": {}, "segmentacao": [], "abc_resumo": [],
+                    "evolucao": [], "top_clientes": [], "ultimo_update": _now}
+
+        df = df.copy()
+        df["CodCli"] = df["CodCli"].astype(str).str.strip()
+        df["nome"] = df["nome"].fillna("—").astype(str).str.strip()
+        for c in ("pedidos", "receita"):
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0.0)
+        df["ultima_compra"] = pd.to_datetime(df["ultima_compra"], errors="coerce")
+        _hoje = pd.Timestamp.now()
+        df["dias"] = (_hoje - df["ultima_compra"]).dt.days.fillna(9999).astype(int)
+
+        # Curva ABC por receita 12m (A=80% · B=95% · C=resto)
+        df = df.sort_values("receita", ascending=False).reset_index(drop=True)
+        tot = float(df["receita"].sum())
+        acum = df["receita"].cumsum() / tot if tot > 0 else df["receita"] * 0
+        df["abc"] = ["A" if a <= 0.80 else "B" if a <= 0.95 else "C" for a in acum]
+
+        # Segmentação por recência (mesmas faixas do Cliente 360º)
+        _FAIXAS = [(0, 30, "Ativo (até 30d)"), (31, 60, "Atenção (31–60d)"),
+                   (61, 90, "Em risco (61–90d)"), (91, 99999, "Inativo (+90d)")]
+        segmentacao = [{"faixa": lbl,
+                        "qtd": int(((df["dias"] >= lo) & (df["dias"] <= hi)).sum()),
+                        "receita": float(df.loc[(df["dias"] >= lo) & (df["dias"] <= hi), "receita"].sum())}
+                       for lo, hi, lbl in _FAIXAS]
+
+        abc_resumo = []
+        for cls in ("A", "B", "C"):
+            sub = df[df["abc"] == cls]
+            abc_resumo.append({"classe": cls, "clientes": int(len(sub)),
+                               "receita": float(sub["receita"].sum()),
+                               "pct_receita": round(float(sub["receita"].sum()) / tot * 100, 1) if tot > 0 else 0.0})
+
+        top10_pct = round(float(df.head(10)["receita"].sum()) / tot * 100, 1) if tot > 0 else 0.0
+        _ini_mes = _hoje.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        ativos_mes = int((df["ultima_compra"] >= _ini_mes).sum())
+
+        top_clientes = [{"CodCli": r["CodCli"], "nome": r["nome"],
+                         "receita": round(float(r["receita"]), 2),
+                         "pedidos": int(r["pedidos"]),
+                         "ticket": round(float(r["receita"]) / r["pedidos"], 2) if r["pedidos"] > 0 else 0.0,
+                         "ultima_compra": r["ultima_compra"].strftime("%Y-%m-%d") if pd.notna(r["ultima_compra"]) else None,
+                         "dias": int(r["dias"]), "abc": r["abc"]}
+                        for _, r in df.head(50).iterrows()]
+
+        evolucao = []
+        df_e = _res.get("evolucao", pd.DataFrame())
+        if df_e is not None and not df_e.empty:
+            evolucao = [{"mes": "%02d/%d" % (int(r["mes"]), int(r["ano"])),
+                         "ativos": int(r["ativos"]), "receita": float(r["receita"] or 0)}
+                        for _, r in df_e.iterrows()]
+
+        _tot_ped = float(df["pedidos"].sum())
+        kpis = {
+            "clientes_12m": int(len(df)),
+            "ativos_mes":   ativos_mes,
+            "novos_mes":    _safe_int(_res.get("novos", pd.DataFrame()), "novos"),
+            "receita_12m":  round(tot, 2),
+            "ticket_medio": round(tot / _tot_ped, 2) if _tot_ped > 0 else 0.0,
+            "top10_pct":    top10_pct,
+        }
+        logger.info("[Clientes] analisar() concluído em %.1fs (%d clientes)", time.time() - t0, len(df))
+        return {"kpis": kpis, "segmentacao": segmentacao, "abc_resumo": abc_resumo,
+                "evolucao": evolucao, "top_clientes": top_clientes, "ultimo_update": _now}
+
+    def analisar_filtrado(self, filtros: dict) -> dict:
+        return self.resultado or self.analisar()
+
+
+# ──────────────────────────────────────────────────────────────────
 #  HUB POLLER BOT  — Polls hub REST API (client-side integration)
 # ──────────────────────────────────────────────────────────────────
 class HubPollerBot(BaseBot):
@@ -2982,7 +3106,7 @@ class BotManager:
         if use_hub:
             self.bots: dict[str, BaseBot] = {
                 name: HubPollerBot(name)
-                for name in ("dashboard", "vendas", "estoque", "financeiro", "crm", "imposto")
+                for name in ("dashboard", "vendas", "estoque", "financeiro", "crm", "imposto", "cliente_comportamento")
             }
         else:
             self.bots: dict[str, BaseBot] = {
@@ -2992,6 +3116,7 @@ class BotManager:
                 "financeiro": BotFinanceiro(),
                 "crm":        BotCRM(),
                 "imposto":    BotImposto(),
+                "cliente_comportamento": BotClientes(),
             }
 
     def load_from_cache(self):
