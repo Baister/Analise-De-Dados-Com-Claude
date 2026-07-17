@@ -442,7 +442,7 @@ export default function CRM({ refreshTrigger }) {
           <CardTitle right={selectedVendedor ? 'vendedor selecionado' : 'mês atual'}>Funil do Mês</CardTitle>
           <FunnelBars etapas={data?.funil_etapas ?? []} />
           <p className="text-subtext text-[10px] mt-2 opacity-70">
-            Fonte: TbOrcPedVnd por emissão (universo = movimentados no mês, OrcPedVnd 1+2) · Em Negociação = em aberto (=1) · Fechadas = viraram pedido (=2) · Faturadas = fechadas com NF emitida (Fat=1). % sobre o universo do mês.
+            Fonte: TbOrcPedVnd por emissão (universo = movimentados no mês, OrcPedVnd 1+2) · Em Negociação = TODOS os movimentados no mês (1+2 — quem virou pedido também negociou) · Fechadas = viraram pedido (=2) · Faturadas = com NF emitida (Fat=1).
           </p>
         </Card>
         <Card>

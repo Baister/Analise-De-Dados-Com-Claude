@@ -2727,8 +2727,10 @@ class BotCRM(BaseBot):
         _vlrc = _safe_float(df_conv, "valor_convertido")
         _fatu = _safe_int(df_conv, "faturadas")
         # Taxa de Conversão (definição do usuário, 17/07): faturamento líquido
-        # do mês ÷ valor total EM NEGOCIAÇÃO (orçamentos em aberto)
-        _taxa = round(_fat_liq / _vlro * 100, 1) if _vlro > 0 else 0.0
+        # do mês ÷ valor EM NEGOCIAÇÃO = universo movimentado (1+2), pois quem
+        # virou pedido também passou por negociação
+        _vneg = _vlro + _vlrc
+        _taxa = round(_fat_liq / _vneg * 100, 1) if _vneg > 0 else 0.0
         _tick = round(_vlrc / _conv, 2) if _conv > 0 else 0.0
         _canc = _safe_int(df_cancelados, "cancelados") if not df_cancelados.empty else 0
         # Em Negociação = orçamentos EM ABERTO (OrcPedVnd=1) — contagem direta da
@@ -2737,7 +2739,8 @@ class BotCRM(BaseBot):
         _orc_ant  = _safe_int(df_anterior, "total_orc_ant")
         _conv_ant = _safe_int(df_anterior, "total_conv_ant")
         _vlro_ant = _safe_float(df_anterior, "valor_orc_ant")
-        _taxa_ant = round(_fat_liq_ant / _vlro_ant * 100, 1) if _vlro_ant > 0 else 0.0
+        _vneg_ant = _vlro_ant + _safe_float(df_anterior, "valor_convertido")
+        _taxa_ant = round(_fat_liq_ant / _vneg_ant * 100, 1) if _vneg_ant > 0 else 0.0
         _delta_taxa  = round(_taxa - _taxa_ant, 1)
         _delta_vlro  = round(_vlro - _vlro_ant, 2)
         _total_d = _orc if _orc > 0 else 1
@@ -2750,7 +2753,7 @@ class BotCRM(BaseBot):
         # universo movimentado 1+2) · Fechadas (=2) · FATURADAS (fechadas com
         # NF Fat=1 vinculada via TbNFVnd.NrOrcPedVnd). % sobre o universo.
         _funil_etapas = [
-            {"etapa": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
+            {"etapa": "Em Negociação", "qtd": _orc,  "pct": 100},
             {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
             {"etapa": "Faturadas",     "qtd": _fatu, "pct": round(_fatu / _total_d * 100, 1)},
         ]
