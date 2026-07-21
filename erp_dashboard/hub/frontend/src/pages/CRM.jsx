@@ -53,10 +53,15 @@ function FunnelBars({ etapas }) {
       {etapas.map(e => {
         const cor = FUNIL_COLORS[e.etapa] || '#8b949e';
         return (
-          <div key={e.etapa} title={e.valor != null ? `Valor: ${brl(e.valor)}` : undefined} style={{ cursor: 'default' }}>
+          <div key={e.etapa} className="group" style={{ cursor: 'default' }}>
             <div className="flex justify-between text-[11px] mb-1">
               <span className="text-text_main">{e.etapa}</span>
               <span className="text-subtext">
+                {e.valor != null && (
+                  <span className="hidden group-hover:inline mr-2 font-semibold" style={{ color: cor }}>
+                    {brl(e.valor)}
+                  </span>
+                )}
                 <b className="text-text_main">{fmtInt(e.qtd)}</b> · {pct(e.pct ?? 0, 1)}
               </span>
             </div>

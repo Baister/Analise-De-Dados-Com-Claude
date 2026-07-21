@@ -2904,8 +2904,16 @@ class BotCRM(BaseBot):
                     CAST(COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS FLOAT)
                         / NULLIF(COUNT(*), 0) * 100             AS taxa_conversao_pct,
                     SUM(CASE WHEN o.OrcPedVnd = 1 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_orcado,
-                    SUM(CASE WHEN o.OrcPedVnd = 2 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido
+                    SUM(CASE WHEN o.OrcPedVnd = 2 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido,
+                    COUNT(nf.nr)                                  AS faturadas,
+                    SUM(CASE WHEN nf.nr IS NOT NULL
+                             THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_faturadas
                 FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+                LEFT JOIN (SELECT DISTINCT TRY_CAST(n.NrOrcPedVnd AS INT) AS nr
+                           FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
+                           WHERE n.DataHoraCanc IS NULL AND n.Fat = 1
+                             AND n.NrOrcPedVnd IS NOT NULL) nf
+                       ON nf.nr = TRY_CAST(o.NrOrcPedVnd AS INT)
                 WHERE o.OrcPedVnd IN (1, 2)
                   AND o.DtOrcPedVnd >= {_MES_INI} AND o.DtOrcPedVnd < {_MES_FIM}
                   AND o.VendOrcPedVnd IN (
@@ -2951,6 +2959,14 @@ class BotCRM(BaseBot):
                 GROUP BY v.CodCli ORDER BY valor_mes DESC
             """, [vend_like])
             base["top_clientes"] = df_top_cli_v.to_dict("records")
+            # Faturado no Mês do vendedor (mesma base do card global)
+            df_fatv = db.new_conn_query(f"""
+                SELECT SUM(v.ValVndTotal) AS fat_liq
+                FROM Blue.dbo.vmVndDoc v WITH (NOLOCK)
+                WHERE v.DtVnd >= {_MES_INI} AND v.DtVnd < {_MES_FIM} {_EXCLUIR_PLANO}
+                  AND v.Vendedor LIKE ?
+            """, [vend_like])
+            base["fat_liq_mes"] = _safe_float(df_fatv, "fat_liq")
 
         _orc  = _safe_int(df_conv, "total_orcamentos")
         _conv = _safe_int(df_conv, "total_convertidos")
@@ -2966,6 +2982,18 @@ class BotCRM(BaseBot):
                  if not df_conv.empty and "em_aberto" in df_conv.columns
                  else max(_orc - _conv - _canc, 0))
         _total_d = _orc if _orc > 0 else 1
+        _cols_f = list(getattr(df_conv, "columns", []))
+        _fatu = _safe_int(df_conv, "faturadas") if "faturadas" in _cols_f else None
+        _vfat = _safe_float(df_conv, "valor_faturadas") if "valor_faturadas" in _cols_f else None
+
+        # Cards por filtro: propostas no caixa do vendedor; deltas e fat_liq_ant
+        # são conceitos globais — neutralizados para o front não exibir mentira.
+        base["valor_faturadas"]    = _vfat
+        if not has_vendedor:
+            base["fat_liq_mes"] = None
+        base["fat_liq_ant"]        = None
+        base["delta_taxa_conv"]    = None
+        base["delta_valor_orcado"] = None
 
         base["total_orcamentos"]   = _orc
         base["total_convertidos"]  = _conv
@@ -2985,6 +3013,10 @@ class BotCRM(BaseBot):
             {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1),
              "valor": _vlrc},
         ]
+        if _fatu is not None:
+            base["funil_etapas"].append(
+                {"etapa": "Faturadas", "qtd": _fatu,
+                 "pct": round(_fatu / _total_d * 100, 1), "valor": _vfat})
         base["qtd_inativos"]   = base.get("qtd_inativos", 0)
         base["qtd_em_risco"]   = base.get("qtd_em_risco", 0)
         base["qtd_ativos_mes"] = base.get("qtd_ativos_mes", 0)
