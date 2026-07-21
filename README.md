@@ -72,13 +72,12 @@ erp_dashboard/
 ├── bots/           # análise: 6 bots + BotManager (analise_bots.py)
 ├── core/           # DatabaseManager (somente leitura) e CacheManager (SQLite/WAL)
 ├── config/         # settings, perfis de acesso, metas.json
-├── ui/             # aplicativo desktop
-└── doc/            # guias por aba (ABA_*.txt), ALTERACOES.txt, AUDITORIA_GERAL.txt
+└── ui/             # aplicativo desktop
 ```
 
-## Qualidade e documentação
+## Qualidade e engenharia
 
-Cada aba possui um **guia de continuidade** em `doc/` (fontes, fórmulas, armadilhas), o histórico completo de mudanças vive em `doc/ALTERACOES.txt` (Partes A–AB) e o projeto passou por **auditoria multi-agente com verificação adversarial** (`doc/AUDITORIA_GERAL.txt`). Todos os bots registram a duração dos ciclos; consultas pesadas rodam paralelizadas em conexões independentes.
+Cada aba possui um guia de continuidade interno (fontes de dados, fórmulas e armadilhas conhecidas), todas as métricas foram **validadas contra relatórios de referência (Power BI)** antes de entrar no ar, e o projeto passou por **auditoria multi-agente com verificação adversarial** — dezenas de bugs confirmados e corrigidos antes do deploy. Todos os bots registram a duração dos ciclos; consultas pesadas rodam paralelizadas em conexões independentes. *(Docs internos e valores de negócio ficam fora do repositório por confidencialidade.)*
 
 ---
 
