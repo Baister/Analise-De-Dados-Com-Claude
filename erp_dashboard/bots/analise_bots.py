@@ -2468,6 +2468,8 @@ class BotCRM(BaseBot):
                 COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END) AS total_convertidos,
                 COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END) AS em_aberto,
                 COUNT(nf.nr)                                AS faturadas,
+                SUM(CASE WHEN nf.nr IS NOT NULL
+                         THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_faturadas,
                 SUM(CASE WHEN o.OrcPedVnd = 1 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_orcado,
                 SUM(CASE WHEN o.OrcPedVnd = 2 THEN o.ValTotalOrcPedVnd ELSE 0 END) AS valor_convertido
             FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
@@ -2830,6 +2832,7 @@ class BotCRM(BaseBot):
             "valor_orcado":       _vlro,
             "fat_liq_mes":        _fat_liq,
             "fat_liq_ant":        _fat_liq_ant,
+            "valor_faturadas":    _safe_float(df_conv, "valor_faturadas"),
             "valor_convertido":   _vlrc,
             "ticket_medio":       _tick,
             "delta_taxa_conv":    _delta_taxa,

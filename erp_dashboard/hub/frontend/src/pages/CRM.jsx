@@ -421,13 +421,15 @@ export default function CRM({ refreshTrigger }) {
 
       {/* ── Visão Geral ── */}
       <SectionLabel first>Visão Geral do Mês</SectionLabel>
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-7 gap-2.5">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-2.5">
         <KpiCard label="Taxa de Conversão" value={pct(taxaConv)} valueColor={taxaColor}
           sub={deltaSub(deltaTaxa, 'pp') ?? 'faturamento líquido ÷ valor em negociação'} topBorder={AZUL} />
         <KpiCard label="Pipeline do Mês (R$)" value={brl(pipeline)}
           sub={deltaSub(deltaPipe != null ? Math.round(deltaPipe / 1000) : null, 'k') ?? 'orçamentos em aberto no mês'} topBorder={VERDE} />
         <KpiCard label="Faturado no Mês (R$)" value={fatLiq != null ? brl(fatLiq) : '—'} valueColor="#4ade80"
           sub={deltaSub(deltaFat != null ? Math.round(deltaFat / 1000) : null, 'k') ?? 'faturamento líquido · base do Dashboard'} topBorder={VERDE} />
+        <KpiCard label="Propostas já no Caixa (R$)" value={data?.valor_faturadas != null ? brl(data.valor_faturadas) : '—'} valueColor="#79c0ff"
+          sub="propostas do mês que já viraram NF" topBorder={AZUL} />
         <KpiCard label="Clientes Ativos" value={fmtInt(data?.qtd_ativos_mes_real)}
           sub={`compraram no mês${globalHint}`} topBorder={AZUL} />
         <KpiCard label="Clientes Novos" value={fmtInt(data?.clientes_novos_qtd)}
@@ -446,7 +448,7 @@ export default function CRM({ refreshTrigger }) {
           <CardTitle right={selectedVendedor ? 'vendedor selecionado' : 'mês atual'}>Funil do Mês</CardTitle>
           <FunnelBars etapas={data?.funil_etapas ?? []} />
           <p className="text-subtext text-[10px] mt-2 opacity-70">
-            Fonte: TbOrcPedVnd por emissão (universo = movimentados no mês, OrcPedVnd 1+2) · Em Negociação = TODOS os movimentados no mês (1+2 — quem virou pedido também negociou) · Fechadas = viraram pedido (=2) · Faturadas = com NF emitida (Fat=1).
+            Pense numa loja: <b>Em Negociação</b> = todos que entraram na loja no mês · <b>Fechadas</b> = disseram “pode fechar” (viraram pedido) · <b>Faturadas</b> = já passaram no caixa, nota emitida. O card “Faturado no Mês” é o caixa inteiro — inclui vendas sem orçamento e propostas de meses anteriores. (Técnico: TbOrcPedVnd por emissão, universo 1+2, NF com Fat=1.)
           </p>
         </Card>
         <Card>
