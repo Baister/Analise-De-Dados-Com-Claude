@@ -4,6 +4,9 @@ Plataforma de BI operacional que conecta ao SQL Server do ERP **Blue** (somente 
 
 > ⚠️ O banco é de **produção**: toda a camada de dados é estritamente `SELECT` (`WITH (NOLOCK)`), sem qualquer operação de escrita no ERP.
 
+![Dashboard — visão geral](screenshots/dashboard.png)
+<p align="center"><i>Interface real em produção — valores e nomes pixelizados por confidencialidade.</i></p>
+
 ---
 
 ## Arquitetura
@@ -53,6 +56,15 @@ Plataforma de BI operacional que conecta ao SQL Server do ERP **Blue** (somente 
 - **Imposto** — ICMS/CFOP do livro fiscal (`Fat=1`, validado 100% contra o BI de referência), projeção do mês
 - **Cliente 360º** — busca + perfil completo: o que compra, vendedores, títulos, orçamentos
 - **Configurações** — metas mensal e individuais (formato BR)
+
+### Telas
+
+| | |
+|---|---|
+| ![Vendas — Ritmo do Mês](screenshots/vendas.png) | ![Estoque — Curva ABC](screenshots/estoque.png) |
+| ![Financeiro — contas a receber](screenshots/financeiro.png) | ![CRM — funil do mês](screenshots/crm.png) |
+
+![Imposto — ICMS, CFOP e livro fiscal](screenshots/imposto.png)
 
 ## Como executar
 
