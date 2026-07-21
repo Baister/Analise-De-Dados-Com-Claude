@@ -53,7 +53,7 @@ function FunnelBars({ etapas }) {
       {etapas.map(e => {
         const cor = FUNIL_COLORS[e.etapa] || '#8b949e';
         return (
-          <div key={e.etapa}>
+          <div key={e.etapa} title={e.valor != null ? `Valor: ${brl(e.valor)}` : undefined} style={{ cursor: 'default' }}>
             <div className="flex justify-between text-[11px] mb-1">
               <span className="text-text_main">{e.etapa}</span>
               <span className="text-subtext">
@@ -421,7 +421,7 @@ export default function CRM({ refreshTrigger }) {
 
       {/* ── Visão Geral ── */}
       <SectionLabel first>Visão Geral do Mês</SectionLabel>
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-2.5">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
         <KpiCard label="Taxa de Conversão" value={pct(taxaConv)} valueColor={taxaColor}
           sub={deltaSub(deltaTaxa, 'pp') ?? 'faturamento líquido ÷ valor em negociação'} topBorder={AZUL} />
         <KpiCard label="Pipeline do Mês (R$)" value={brl(pipeline)}

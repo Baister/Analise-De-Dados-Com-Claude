@@ -2760,9 +2760,11 @@ class BotCRM(BaseBot):
         # universo movimentado 1+2) · Fechadas (=2) · FATURADAS (fechadas com
         # NF Fat=1 vinculada via TbNFVnd.NrOrcPedVnd). % sobre o universo.
         _funil_etapas = [
-            {"etapa": "Em Negociação", "qtd": _orc,  "pct": 100},
-            {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
-            {"etapa": "Faturadas",     "qtd": _fatu, "pct": round(_fatu / _total_d * 100, 1)},
+            {"etapa": "Em Negociação", "qtd": _orc,  "pct": 100, "valor": _vlro + _vlrc},
+            {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1),
+             "valor": _vlrc},
+            {"etapa": "Faturadas",     "qtd": _fatu, "pct": round(_fatu / _total_d * 100, 1),
+             "valor": _safe_float(df_conv, "valor_faturadas")},
         ]
 
         # ── CRM v4 · Carteira e oportunidades (2026-07-15) ────────
@@ -2977,9 +2979,11 @@ class BotCRM(BaseBot):
             {"status": "Cancelados",    "qtd": _canc, "pct": round(_canc / _total_d * 100, 1)},
         ]
         base["funil_etapas"] = [
-            {"etapa": "Propostas",     "qtd": _orc,  "pct": 100},
-            {"etapa": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1)},
-            {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1)},
+            {"etapa": "Propostas",     "qtd": _orc,  "pct": 100, "valor": _vlro + _vlrc},
+            {"etapa": "Em Negociação", "qtd": _ativ, "pct": round(_ativ / _total_d * 100, 1),
+             "valor": _vlro},
+            {"etapa": "Fechadas",      "qtd": _conv, "pct": round(_conv / _total_d * 100, 1),
+             "valor": _vlrc},
         ]
         base["qtd_inativos"]   = base.get("qtd_inativos", 0)
         base["qtd_em_risco"]   = base.get("qtd_em_risco", 0)
