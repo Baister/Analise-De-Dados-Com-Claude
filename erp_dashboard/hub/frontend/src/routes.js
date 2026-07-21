@@ -9,5 +9,6 @@ export const ROUTES = [
   { key: 'imposto',    label: 'Imposto',    icon: '🧮', botKey: 'imposto',    component: () => import('./pages/Imposto')    },
   { key: 'cliente',               label: 'Cliente',  icon: '🧾', botKey: null, component: () => import('./pages/Cliente')               },
   { key: 'cliente_comportamento', label: 'Clientes', icon: '👥', botKey: 'cliente_comportamento', component: () => import('./pages/ClienteComportamento') },
+  { key: 'painel_pedidos', label: 'Painel Pedidos', icon: '🚚', botKey: null, component: () => import('./pages/PainelPedidos') },
   { key: 'configuracoes', label: 'Configurações', icon: '⚙️', botKey: null, component: () => import('./pages/Configuracoes') },
 ];

@@ -451,6 +451,37 @@ def _cliente_perfil(cod: str) -> dict:
 
 # NOTE: /dados/cliente must be registered BEFORE /dados/{bot_name} to avoid
 # FastAPI matching "cliente" as the bot_name path parameter.
+@app.get("/dados/painel_pedidos")
+def dados_painel_pedidos(token: str = Depends(verify_token)):
+    """Esteira de pedidos AO VIVO (vmPainelPedidoVndConf) — consulta direta,
+    sem bot/cache: a view é leve (dezenas de linhas) e muda em tempo real."""
+    _require_tab(token, "painel_pedidos")
+    df = db.new_conn_query("""
+        SELECT TOP 500
+            p.NrOrcPedVnd            AS pedido,
+            p.NomeFantCli            AS cliente,
+            p.RzsCli                 AS razao,
+            p.VendOrcPedVnd          AS vendedor,
+            p.DtOrcPedVnd            AS emissao,
+            p.DtEntrOrcPedVnd        AS entrega,
+            p.StatusOrcPedConsig     AS status,
+            p.DescrStatusOrcPedConsig AS status_descr,
+            p.GrauPrioridade         AS prioridade
+        FROM Blue.dbo.vmPainelPedidoVndConf p
+        ORDER BY p.DtOrcPedVnd DESC
+    """)
+    if df.empty and db.last_error:
+        raise HTTPException(status_code=503, detail=f"Painel indisponível: {db.last_error}")
+    pedidos = df.to_dict("records")
+    resumo: dict = {}
+    for r in pedidos:
+        resumo[r["status"]] = resumo.get(r["status"], 0) + 1
+    payload = {"pedidos": pedidos, "resumo": resumo,
+               "ts": datetime.now().strftime("%H:%M:%S")}
+    return Response(content=json.dumps(_clean_nan(payload), default=str),
+                    media_type="application/json")
+
+
 @app.get("/dados/cliente")
 def dados_cliente(
     busca: Optional[str] = Query(default=None),
