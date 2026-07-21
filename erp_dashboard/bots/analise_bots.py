@@ -2512,7 +2512,10 @@ class BotCRM(BaseBot):
         # NrOrcPedVnd (TbOrcPedVnd) != NrDoc (vmVndDoc — numeração NF).
         # Join direto não funciona; usar vmVndDoc+vwVndDoc como df_top_cli.
         # propostas = todos os docs do mês; convertidos = apenas faturados.
-        df_ranking = db.query(f"""
+        # new_conn_query: conexão própria (90s) — alimenta TODA a seção Equipe
+        # de Vendas do front; no lock compartilhado (45s) estourava HYT00 no
+        # rush pós-boot e a seção inteira ficava "Sem dados".
+        df_ranking = db.new_conn_query(f"""
             SELECT TOP 20
                 v.Vendedor,
                 COUNT(DISTINCT v.NrDoc) AS propostas,
@@ -2544,7 +2547,7 @@ class BotCRM(BaseBot):
         # vmVndDoc (ex.: orçamentos cancelados antes de emitir NF). Qualquer join
         # com vmVndDoc perde esses docs. Abordagem: query direta em vwVndDoc,
         # nome do vendedor via CodFuncVnd → CodVend (lookup de vmVndDoc).
-        df_canc_vend = db.query(f"""
+        df_canc_vend = db.new_conn_query(f"""
             SELECT TOP 20
                 vn.Vendedor,
                 COUNT(*) AS cancelados
@@ -2552,6 +2555,7 @@ class BotCRM(BaseBot):
             INNER JOIN (
                 SELECT DISTINCT CodVend, MAX(Vendedor) AS Vendedor
                 FROM Blue.dbo.vmVndDoc WITH (NOLOCK)
+                WHERE DtVnd >= DATEADD(month, -12, GETDATE())
                 GROUP BY CodVend
             ) vn ON d.CodFuncVnd = vn.CodVend
             WHERE d.DataEmissao >= {_MES_INI}
@@ -2652,22 +2656,12 @@ class BotCRM(BaseBot):
         """)
 
         # ── Funil por Vendedor e Marca ────────────────────────────
-        df_conv_vend = db.query(f"""
-            SELECT TOP 20
-                v.Vendedor,
-                i.DescrMarca,
-                COUNT(CASE WHEN o.OrcPedVnd = 1 THEN 1 END)                              AS orcamentos,
-                COUNT(CASE WHEN o.OrcPedVnd = 2 THEN 1 END)                              AS convertidos,
-                SUM(CASE WHEN o.OrcPedVnd = 1 THEN i.PrecoVndTotItem ELSE 0 END)         AS valor_orcado,
-                SUM(CASE WHEN o.OrcPedVnd = 2 THEN i.PrecoVndTotItem ELSE 0 END)         AS valor_convertido
-            FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
-            INNER JOIN Blue.dbo.vmVndDoc v     WITH (NOLOCK) ON o.NrOrcPedVnd = v.NrDoc
-            INNER JOIN Blue.dbo.vmVndItemDoc i WITH (NOLOCK) ON o.NrOrcPedVnd = i.NrDoc
-            WHERE o.DtOrcPedVnd >= {_MES_INI}
-              AND o.DtOrcPedVnd <  {_MES_FIM}
-            GROUP BY v.Vendedor, i.DescrMarca
-            ORDER BY valor_orcado DESC
-        """)
+        # REMOVIDA (Parte AG): a query legada juntava vmVndDoc/vmVndItemDoc SEM
+        # filtro de data e com join NrOrcPedVnd = NrDoc (numerações distintas —
+        # ver comentário do df_ranking), estourando HYT00 em todo ciclo (~90s
+        # perdidos). Nenhum consumidor: front usa ranking_vendedores; desktop
+        # usa meta_vendedor. Chave mantida vazia por compatibilidade de payload.
+        df_conv_vend = pd.DataFrame()
 
         # ── Funil resumido por tipo (para gráfico de barras) ──────
         df_funil = db.query(f"""
