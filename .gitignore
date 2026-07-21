@@ -1,0 +1,12 @@
+# Confidencial — NUNCA versionar
+erp_dashboard/config/settings.py
+erp_dashboard/config/metas.json
+
+# Bytecode (pode embutir credenciais de settings.py)
+__pycache__/
+*.pyc
+
+# Dados de runtime / build
+erp_dashboard/cache.db*
+erp_dashboard/hub/static/
+node_modules/
