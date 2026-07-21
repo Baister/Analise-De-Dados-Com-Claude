@@ -2828,6 +2828,8 @@ class BotCRM(BaseBot):
             "total_convertidos":  _conv,
             "taxa_conversao_pct": _taxa,
             "valor_orcado":       _vlro,
+            "fat_liq_mes":        _fat_liq,
+            "fat_liq_ant":        _fat_liq_ant,
             "valor_convertido":   _vlrc,
             "ticket_medio":       _tick,
             "delta_taxa_conv":    _delta_taxa,

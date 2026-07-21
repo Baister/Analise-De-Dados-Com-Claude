@@ -377,6 +377,8 @@ export default function CRM({ refreshTrigger }) {
   const deltaTaxa = data?.delta_taxa_conv    ?? null;
   const pipeline  = data?.valor_orcado       ?? 0;
   const deltaPipe = data?.delta_valor_orcado ?? null;
+  const fatLiq    = data?.fat_liq_mes        ?? null;
+  const deltaFat  = fatLiq != null && data?.fat_liq_ant != null ? fatLiq - data.fat_liq_ant : null;
   const qtdInat   = qtdInatVend  ?? (data?.qtd_inativos ?? 0);
   const qtdRisco  = qtdRiscoVend ?? (data?.qtd_em_risco ?? 0);
   const riscoTotal = selectedVendedor
@@ -419,11 +421,13 @@ export default function CRM({ refreshTrigger }) {
 
       {/* ── Visão Geral ── */}
       <SectionLabel first>Visão Geral do Mês</SectionLabel>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-7 gap-2.5">
         <KpiCard label="Taxa de Conversão" value={pct(taxaConv)} valueColor={taxaColor}
           sub={deltaSub(deltaTaxa, 'pp') ?? 'faturamento líquido ÷ valor em negociação'} topBorder={AZUL} />
         <KpiCard label="Pipeline do Mês (R$)" value={brl(pipeline)}
           sub={deltaSub(deltaPipe != null ? Math.round(deltaPipe / 1000) : null, 'k') ?? 'orçamentos em aberto no mês'} topBorder={VERDE} />
+        <KpiCard label="Faturado no Mês (R$)" value={fatLiq != null ? brl(fatLiq) : '—'} valueColor="#4ade80"
+          sub={deltaSub(deltaFat != null ? Math.round(deltaFat / 1000) : null, 'k') ?? 'faturamento líquido · base do Dashboard'} topBorder={VERDE} />
         <KpiCard label="Clientes Ativos" value={fmtInt(data?.qtd_ativos_mes_real)}
           sub={`compraram no mês${globalHint}`} topBorder={AZUL} />
         <KpiCard label="Clientes Novos" value={fmtInt(data?.clientes_novos_qtd)}
