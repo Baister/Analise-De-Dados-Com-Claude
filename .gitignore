@@ -10,3 +10,9 @@ __pycache__/
 erp_dashboard/cache.db*
 erp_dashboard/hub/static/
 node_modules/
+
+# Docs internos com dados de negocio - NUNCA publicar
+erp_dashboard/doc/
+erp_dashboard/docs/
+erp_dashboard/.superpowers/
+.superpowers/
