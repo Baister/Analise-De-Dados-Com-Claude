@@ -16,3 +16,7 @@ erp_dashboard/doc/
 erp_dashboard/docs/
 erp_dashboard/.superpowers/
 .superpowers/
+
+# Config local do Claude Code (por maquina)
+.claude/settings.local.json
+**/.claude/settings.local.json
