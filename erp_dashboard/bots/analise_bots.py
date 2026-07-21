@@ -104,6 +104,12 @@ class BaseBot(threading.Thread):
 
     def run(self):
         logger.info("Bot [%s] iniciado. Intervalo: %ds", self.name_label, self.interval)
+        # Boot escalonado: 7 bots disparando juntos derrubavam queries pesadas
+        # por timeout (HYT00) no rush pós-start. O cache cobre a espera.
+        for _ in range(int(getattr(self, "boot_delay", 0))):
+            if self._stop.is_set():
+                return
+            time.sleep(1)
         while not self._stop.is_set():
             self.status = "executando"
             try:
@@ -1392,6 +1398,11 @@ class BotEstoque(BaseBot):
 
         _now_str = datetime.now().strftime("%H:%M:%S")
         if df_it.empty:
+            if self.resultado:
+                # Timeout transitório (ex.: rush de boot): NUNCA sobrescrever um
+                # resultado bom — o payload mínimo destruiria cache e tela.
+                logger.warning("[Estq] vmAnaliseEstqItem sem dados — mantendo último resultado bom")
+                return self.resultado
             logger.warning("[Estq] vmAnaliseEstqItem sem dados — payload mínimo")
             return {
                 "total_itens": 0, "valor_total_estoque": 0.0, "qtd_disponivel": 0,
@@ -3151,9 +3162,10 @@ class BotManager:
                         logger.warning("Callback error [%s]: %s", bot.name_label, e)
 
     def start_all(self):
-        for bot in self.bots.values():
+        for i, bot in enumerate(self.bots.values()):
+            bot.boot_delay = i * 20  # 0s, 20s, ... 120s — espalha o rush de boot
             bot.start()
-        logger.info("Todos os bots iniciados.")
+        logger.info("Todos os bots iniciados (boot escalonado: 20s entre bots).")
 
     def stop_all(self):
         for bot in self.bots.values():
