@@ -466,6 +466,7 @@ def dados_painel_pedidos(token: str = Depends(verify_token)):
             p.DtEntrOrcPedVnd        AS entrega,
             p.StatusOrcPedConsig     AS status,
             p.DescrStatusOrcPedConsig AS status_descr,
+            p.DtHrEditOrcPedVnd      AS editado,
             p.GrauPrioridade         AS prioridade
         FROM Blue.dbo.vmPainelPedidoVndConf p
         ORDER BY p.DtOrcPedVnd DESC
