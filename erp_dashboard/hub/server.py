@@ -470,8 +470,8 @@ def dados_painel_pedidos(token: str = Depends(verify_token)):
             p.DtHrEditOrcPedVnd      AS editado,
             p.GrauPrioridade         AS prioridade
         FROM Blue.dbo.vmPainelPedidoVndConf p
-        WHERE p.StatusOrcPedConsig IN (5, 3)
-        ORDER BY p.NrOrcPedVnd
+        WHERE p.StatusOrcPedConsig NOT IN (1, 6, 26, 29, 200, 201)
+        ORDER BY p.NrOrcPedVnd DESC
     """)
     if df.empty and db.last_error:
         raise HTTPException(status_code=503, detail=f"Painel indisponível: {db.last_error}")

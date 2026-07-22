@@ -71,7 +71,7 @@ export default function PainelPedidos() {
     String(p.razao ?? '').toLowerCase().includes(q) ||
     String(p.cliente ?? '').toLowerCase().includes(q) ||
     String(p.pedido ?? '').toLowerCase().includes(q));
-  const porPedido = (a, b) => (Number(a.pedido) || 0) - (Number(b.pedido) || 0);
+  const porPedido = (a, b) => (Number(b.pedido) || 0) - (Number(a.pedido) || 0);  // decrescente
 
   const [aguardando, saiu] = useMemo(() => {
     const q = busca.trim().toLowerCase();
@@ -98,7 +98,7 @@ export default function PainelPedidos() {
             <span className="text-[10px] font-normal" style={{ color: '#4ade80' }}>AO VIVO</span>
           </h1>
           <p className="text-subtext text-[11px]">
-            Fila pendente + NFs emitidas hoje · nº crescente · atualiza a cada 30s
+            Fila pendente + NFs emitidas hoje · nº decrescente (mais recentes no topo) · atualiza a cada 30s
             {data?.ts && <> · última consulta {data.ts}</>}
           </p>
         </div>
