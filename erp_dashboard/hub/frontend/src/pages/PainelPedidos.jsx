@@ -1,42 +1,38 @@
 import { useState, useEffect, useMemo } from 'react';
 import { apiFetch } from '../hooks/useApi';
+import { brl } from '../utils/format';
 
-const AMBAR = '#d29922', AZUL = '#1f6feb', ROXO = '#a371f7', VERDE = '#238636';
+const AMBAR = '#d29922', AZUL = '#1f6feb', VERDE = '#238636';
 
-// status do ERP → coluna do telão (estilo fast-food: Em Preparo | Pronto)
+// Fila viva da view (pré-faturamento). Quem fatura SOME da view → coluna Saiu
+// vem das NFs do dia (endpoint envia separado em `saiu`).
 const CHIP = {
   5: { txt: 'CONFERÊNCIA', cor: AMBAR },
   3: { txt: 'FATURAMENTO', cor: AZUL },
-  6: { txt: 'NF EMITIDA', cor: ROXO },
-  1: { txt: 'SAIU', cor: VERDE },
 };
-const PREPARO = [5, 3], PRONTO = [6, 1];
 
-function Linha({ p, lado }) {
-  const chip = CHIP[p.status] ?? { txt: p.status_descr ?? '—', cor: '#8b949e' };
-  const razao = String(p.razao ?? p.cliente ?? '—').trim().toUpperCase();
+const hora = d => (d ? String(d).slice(11, 16) : '');
+
+function Linha({ razao, sub, chipTxt, chipCor, brilho }) {
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg bg-bg border border-card_border"
-      style={{ borderLeft: `4px solid ${chip.cor}`, boxShadow: lado === 'pronto' && p.status === 1 ? `0 0 12px ${VERDE}44` : 'none' }}>
+    <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg bg-bg border border-card_border min-w-0"
+      style={{ borderLeft: `4px solid ${chipCor}`, boxShadow: brilho ? `0 0 12px ${VERDE}44` : 'none' }}>
       <div className="min-w-0">
         <p className="text-text_main font-extrabold leading-tight truncate"
           style={{ fontSize: 'clamp(15px, 1.4vw, 20px)', letterSpacing: '0.3px' }}>
           {razao}
         </p>
-        <p className="text-subtext text-[11px] mt-0.5">
-          pedido <b className="text-text_main" style={{ fontFamily: 'monospace', fontSize: 13 }}>{String(p.pedido).trim()}</b>
-          {p.vendedor && <> · {String(p.vendedor).trim()}</>}
-        </p>
+        <p className="text-subtext text-[11px] mt-0.5 truncate">{sub}</p>
       </div>
       <span className="text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap"
-        style={{ background: `${chip.cor}22`, color: chip.cor, border: `1px solid ${chip.cor}55` }}>
-        {p.status === 1 ? '✓ SAIU' : chip.txt}
+        style={{ background: `${chipCor}22`, color: chipCor, border: `1px solid ${chipCor}55` }}>
+        {chipTxt}
       </span>
     </div>
   );
 }
 
-function Coluna({ titulo, cor, itens, lado, vazio }) {
+function Coluna({ titulo, cor, children, qtd, vazio }) {
   return (
     <div className="bg-card border border-card_border rounded-xl p-4 flex-1 min-w-0 w-full"
       style={{ borderTop: `3px solid ${cor}` }}>
@@ -44,12 +40,10 @@ function Coluna({ titulo, cor, itens, lado, vazio }) {
         <h2 className="font-extrabold uppercase" style={{ color: cor, fontSize: 'clamp(16px, 1.6vw, 22px)', letterSpacing: '1.5px' }}>
           {titulo}
         </h2>
-        <span className="text-2xl font-extrabold" style={{ color: cor }}>{itens.length}</span>
+        <span className="text-2xl font-extrabold" style={{ color: cor }}>{qtd}</span>
       </div>
       <div className="flex flex-col gap-2">
-        {itens.length === 0
-          ? <p className="text-subtext text-sm text-center py-8">{vazio}</p>
-          : itens.map(p => <Linha key={`${p.pedido}-${p.status}`} p={p} lado={lado} />)}
+        {qtd === 0 ? <p className="text-subtext text-sm text-center py-8">{vazio}</p> : children}
       </div>
     </div>
   );
@@ -73,16 +67,18 @@ export default function PainelPedidos() {
     return () => { vivo = false; clearInterval(t); };
   }, []);
 
-  const [preparo, pronto] = useMemo(() => {
+  const filtra = (lista, q) => !q ? lista : lista.filter(p =>
+    String(p.razao ?? '').toLowerCase().includes(q) ||
+    String(p.cliente ?? '').toLowerCase().includes(q) ||
+    String(p.pedido ?? '').toLowerCase().includes(q));
+  const porPedido = (a, b) => (Number(a.pedido) || 0) - (Number(b.pedido) || 0);
+
+  const [aguardando, saiu] = useMemo(() => {
     const q = busca.trim().toLowerCase();
-    const lista = (data?.pedidos ?? []).filter(p => !q ||
-      String(p.razao ?? '').toLowerCase().includes(q) ||
-      String(p.cliente ?? '').toLowerCase().includes(q) ||
-      String(p.pedido ?? '').toLowerCase().includes(q));
-    const porPedido = (a, b) => (Number(a.pedido) || 0) - (Number(b.pedido) || 0);  // nº crescente
-    const prep = lista.filter(p => PREPARO.includes(p.status)).sort(porPedido);
-    const pron = lista.filter(p => PRONTO.includes(p.status)).sort(porPedido);
-    return [prep, pron];
+    return [
+      filtra(data?.pedidos ?? [], q).sort(porPedido),
+      filtra(data?.saiu ?? [], q).sort(porPedido),
+    ];
   }, [data, busca]);
 
   if (!data && !erro) return (
@@ -102,7 +98,8 @@ export default function PainelPedidos() {
             <span className="text-[10px] font-normal" style={{ color: '#4ade80' }}>AO VIVO</span>
           </h1>
           <p className="text-subtext text-[11px]">
-            Somente pedidos de hoje · nº crescente · atualiza a cada 30s{data?.ts && <> · última consulta {data.ts}</>}
+            Fila pendente + NFs emitidas hoje · nº crescente · atualiza a cada 30s
+            {data?.ts && <> · última consulta {data.ts}</>}
           </p>
         </div>
         <input type="text" placeholder="Buscar razão social ou nº do pedido…" value={busca}
@@ -112,16 +109,34 @@ export default function PainelPedidos() {
 
       {erro && <p className="text-accent_red text-xs mb-2">Erro ao consultar: {erro}</p>}
 
-      <div className="flex flex-col lg:flex-row gap-3 items-start">
-        <Coluna titulo="⏳ Aguardando" cor={AMBAR} itens={preparo} lado="preparo"
-          vazio="Nenhum pedido aguardando — esteira limpa!" />
-        <Coluna titulo="✓ Pronto · Saiu" cor={VERDE} itens={pronto} lado="pronto"
-          vazio="Nenhum pedido pronto ainda." />
+      <div className="flex flex-col lg:flex-row gap-3 items-start w-full">
+        <Coluna titulo="⏳ Aguardando" cor={AMBAR} qtd={aguardando.length}
+          vazio="Nenhum pedido aguardando — esteira limpa!">
+          {aguardando.map(p => {
+            const chip = CHIP[p.status] ?? { txt: p.status_descr ?? '—', cor: '#8b949e' };
+            return <Linha key={`a-${p.pedido}`} chipTxt={chip.txt} chipCor={chip.cor}
+              razao={String(p.razao ?? p.cliente ?? '—').trim().toUpperCase()}
+              sub={<>pedido <b className="text-text_main">{String(p.pedido).trim()}</b>
+                {p.vendedor && <> · {String(p.vendedor).trim()}</>}
+                {p.emissao && <> · emitido {String(p.emissao).slice(8, 10)}/{String(p.emissao).slice(5, 7)}</>}</>} />;
+          })}
+        </Coluna>
+        <Coluna titulo="✓ Saiu Hoje" cor={VERDE} qtd={saiu.length}
+          vazio="Nenhuma NF emitida hoje ainda.">
+          {saiu.map(p => (
+            <Linha key={`s-${p.pedido}-${p.nf}`} chipTxt="✓ SAIU" chipCor={VERDE} brilho
+              razao={String(p.razao ?? p.cliente ?? '—').trim().toUpperCase()}
+              sub={<>pedido <b className="text-text_main">{String(p.pedido).trim()}</b>
+                {p.nf && <> · NF {String(p.nf).trim()}</>}
+                {p.emissao && <> · {hora(p.emissao)}</>}
+                {p.valor != null && <> · {brl(p.valor)}</>}</>} />
+          ))}
+        </Coluna>
       </div>
 
       <p className="text-subtext text-[10px] mt-3 opacity-70">
-        Aguardando = conferência/faturamento · Pronto = NF emitida ou concluído · somente pedidos emitidos hoje,
-        em ordem crescente de nº · consulta direta ao ERP, sem cache.
+        Aguardando = fila viva do painel do ERP (conferência → faturamento; inclui pendências de dias anteriores) ·
+        Saiu = pedidos com NF emitida HOJE (Fat=1, não cancelada) — ao faturar, o pedido sai da fila e aparece aqui.
       </p>
     </div>
   );

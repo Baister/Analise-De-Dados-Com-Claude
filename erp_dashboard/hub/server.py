@@ -470,11 +470,29 @@ def dados_painel_pedidos(token: str = Depends(verify_token)):
             p.DtHrEditOrcPedVnd      AS editado,
             p.GrauPrioridade         AS prioridade
         FROM Blue.dbo.vmPainelPedidoVndConf p
-        WHERE p.DtOrcPedVnd >= CAST(GETDATE() AS DATE)
+        WHERE p.StatusOrcPedConsig IN (5, 3)
         ORDER BY p.NrOrcPedVnd
     """)
     if df.empty and db.last_error:
         raise HTTPException(status_code=503, detail=f"Painel indisponível: {db.last_error}")
+    # Ciclo real (comprovado nos dados): o pedido SAI da view quando fatura —
+    # nenhuma linha dela tem NF vinculada; status 1/6 são registros fósseis.
+    # Logo, "Saiu" = NFs de HOJE (Fat=1, não canceladas) vinculadas a pedido.
+    df_saiu = db.new_conn_query("""
+        SELECT TOP 500
+            n.NrOrcPedVnd   AS pedido,
+            c.RzsCli        AS razao,
+            c.NomeFantCli   AS cliente,
+            n.NrNFVnd       AS nf,
+            n.DtEmisNFVnd   AS emissao,
+            n.ValTotalNFVnd AS valor
+        FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
+        LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON c.CodRedCt = n.CodRedCliNFVnd
+        WHERE n.DtEmisNFVnd >= CAST(GETDATE() AS DATE)
+          AND n.DataHoraCanc IS NULL AND n.Fat = 1
+          AND TRY_CAST(n.NrOrcPedVnd AS INT) IS NOT NULL
+        ORDER BY TRY_CAST(n.NrOrcPedVnd AS INT)
+    """)
     pedidos = df.to_dict("records")
     resumo: dict = {}
     for r in pedidos:
@@ -482,8 +500,8 @@ def dados_painel_pedidos(token: str = Depends(verify_token)):
         # (default=str só cobre valores) e no front o === compara com número
         r["status"] = int(r["status"]) if r.get("status") is not None else 0
         resumo[r["status"]] = resumo.get(r["status"], 0) + 1
-    payload = {"pedidos": pedidos, "resumo": resumo,
-               "ts": datetime.now().strftime("%H:%M:%S")}
+    payload = {"pedidos": pedidos, "saiu": df_saiu.to_dict("records"),
+               "resumo": resumo, "ts": datetime.now().strftime("%H:%M:%S")}
     return Response(content=json.dumps(_clean_nan(payload), default=str),
                     media_type="application/json")
 
