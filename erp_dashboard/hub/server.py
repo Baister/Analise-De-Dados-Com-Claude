@@ -468,8 +468,12 @@ def dados_painel_pedidos(token: str = Depends(verify_token)):
             p.StatusOrcPedConsig     AS status,
             p.DescrStatusOrcPedConsig AS status_descr,
             p.DtHrEditOrcPedVnd      AS editado,
-            p.GrauPrioridade         AS prioridade
+            p.GrauPrioridade         AS prioridade,
+            o.ValTotalOrcPedVnd      AS valor,
+            DATEDIFF(hour, p.DtOrcPedVnd, GETDATE()) AS horas_fila
         FROM Blue.dbo.vmPainelPedidoVndConf p
+        LEFT JOIN Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+               ON o.NrOrcPedVnd = p.NrOrcPedVnd AND o.CodEmpr = p.CodEmpr
         WHERE p.StatusOrcPedConsig NOT IN (1, 6, 26, 29, 200, 201)
         ORDER BY p.NrOrcPedVnd DESC
     """)

@@ -1,50 +1,55 @@
 import { useState, useEffect, useMemo } from 'react';
 import { apiFetch } from '../hooks/useApi';
-import { brl } from '../utils/format';
+import DataTable from '../components/DataTable';
+import { brl, fmtDate } from '../utils/format';
 
-const AMBAR = '#d29922', AZUL = '#1f6feb', VERDE = '#238636';
+const AMBAR = '#d29922', AZUL = '#1f6feb', VERDE = '#238636', VERM = '#da3633', ROXO = '#a371f7';
 
-// Fila viva da view (pré-faturamento). Quem fatura SOME da view → coluna Saiu
-// vem das NFs do dia (endpoint envia separado em `saiu`).
-const CHIP = {
-  5: { txt: 'CONFERÊNCIA', cor: AMBAR },
-  3: { txt: 'FATURAMENTO', cor: AZUL },
+// Cores por status (catálogo TbStatusOrcPedConsig); desconhecidos caem no cinza
+const COR_STATUS = { 5: AMBAR, 3: AZUL, 2: ROXO, 44: ROXO, 45: ROXO, 46: ROXO, 47: ROXO, 48: ROXO, 49: ROXO, 50: ROXO };
+const ORDEM_STATUS = { 5: 0, 3: 1 };  // conferência antes de faturamento; resto por código
+
+const hora = d => (d ? String(d).slice(11, 16) : '—');
+const razaoDe = p => String(p.razao ?? p.cliente ?? '—').trim().toUpperCase();
+
+const agingBadge = h => {
+  if (h == null) return '—';
+  const [c, bg] = h <= 24 ? ['#4ade80', 'rgba(35,134,54,0.15)']
+    : h <= 72 ? ['#fbbf24', 'rgba(210,153,34,0.15)'] : ['#f87171', 'rgba(218,54,51,0.15)'];
+  const txt = h < 24 ? `${h}h` : `${Math.floor(h / 24)}d ${h % 24}h`;
+  return <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 8px', borderRadius: 9999, background: bg, color: c }}>{txt}</span>;
 };
 
-const hora = d => (d ? String(d).slice(11, 16) : '');
+const COLS_FILA = [
+  { key: 'pedido', label: 'Pedido', render: v => <b style={{ fontFamily: 'monospace' }}>{String(v).trim()}</b> },
+  { key: 'razao', label: 'Razão Social', render: (v, r) => <span className="font-semibold">{razaoDe(r)}</span> },
+  { key: 'vendedor', label: 'Vendedor', render: v => String(v ?? '—').trim() },
+  { key: 'emissao', label: 'Emitido', render: v => fmtDate(v) },
+  { key: 'entrega', label: 'Entrega', render: (v, r) => v
+      ? <span style={{ color: new Date(v) < new Date() ? '#f87171' : undefined }}>{fmtDate(v)}</span> : '—' },
+  { key: 'valor', label: 'Valor', align: 'right', render: v => (v != null ? brl(v) : '—') },
+  { key: 'horas_fila', label: 'Na fila', render: v => agingBadge(v) },
+];
 
-function Linha({ razao, sub, chipTxt, chipCor, brilho }) {
-  return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-lg bg-bg border border-card_border min-w-0"
-      style={{ borderLeft: `4px solid ${chipCor}`, boxShadow: brilho ? `0 0 12px ${VERDE}44` : 'none' }}>
-      <div className="min-w-0">
-        <p className="text-text_main font-extrabold leading-tight truncate"
-          style={{ fontSize: 'clamp(15px, 1.4vw, 20px)', letterSpacing: '0.3px' }}>
-          {razao}
-        </p>
-        <p className="text-subtext text-[11px] mt-0.5 truncate">{sub}</p>
-      </div>
-      <span className="text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap"
-        style={{ background: `${chipCor}22`, color: chipCor, border: `1px solid ${chipCor}55` }}>
-        {chipTxt}
-      </span>
-    </div>
-  );
-}
+const COLS_SAIU = [
+  { key: 'pedido', label: 'Pedido', render: v => <b style={{ fontFamily: 'monospace' }}>{String(v).trim()}</b> },
+  { key: 'razao', label: 'Razão Social', render: (v, r) => <span className="font-semibold">{razaoDe(r)}</span> },
+  { key: 'nf', label: 'NF', render: v => <span style={{ fontFamily: 'monospace' }}>{String(v ?? '—').trim()}</span> },
+  { key: 'emissao', label: 'Hora', render: v => hora(v) },
+  { key: 'valor', label: 'Valor', align: 'right', render: v => (v != null ? brl(v) : '—') },
+];
 
-function Coluna({ titulo, cor, children, qtd, vazio }) {
+function Secao({ titulo, cor, qtd, children, right }) {
   return (
-    <div className="bg-card border border-card_border rounded-xl p-4 flex-1 min-w-0 w-full"
+    <div className="bg-card border border-card_border rounded-xl p-4 min-w-0 w-full mb-3"
       style={{ borderTop: `3px solid ${cor}` }}>
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="font-extrabold uppercase" style={{ color: cor, fontSize: 'clamp(16px, 1.6vw, 22px)', letterSpacing: '1.5px' }}>
-          {titulo}
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-1">
+        <h2 className="font-extrabold uppercase" style={{ color: cor, fontSize: 15, letterSpacing: '1.2px' }}>
+          {titulo} <span className="ml-1">({qtd})</span>
         </h2>
-        <span className="text-2xl font-extrabold" style={{ color: cor }}>{qtd}</span>
+        {right && <span className="text-[10px] text-subtext">{right}</span>}
       </div>
-      <div className="flex flex-col gap-2">
-        {qtd === 0 ? <p className="text-subtext text-sm text-center py-8">{vazio}</p> : children}
-      </div>
+      {children}
     </div>
   );
 }
@@ -67,18 +72,18 @@ export default function PainelPedidos() {
     return () => { vivo = false; clearInterval(t); };
   }, []);
 
-  const filtra = (lista, q) => !q ? lista : lista.filter(p =>
-    String(p.razao ?? '').toLowerCase().includes(q) ||
-    String(p.cliente ?? '').toLowerCase().includes(q) ||
-    String(p.pedido ?? '').toLowerCase().includes(q));
-  const porPedido = (a, b) => (Number(b.pedido) || 0) - (Number(a.pedido) || 0);  // decrescente
-
-  const [aguardando, saiu] = useMemo(() => {
+  const [grupos, saiu, totalFila] = useMemo(() => {
     const q = busca.trim().toLowerCase();
-    return [
-      filtra(data?.pedidos ?? [], q).sort(porPedido),
-      filtra(data?.saiu ?? [], q).sort(porPedido),
-    ];
+    const casa = p => !q || razaoDe(p).toLowerCase().includes(q) || String(p.pedido ?? '').toLowerCase().includes(q);
+    const fila = (data?.pedidos ?? []).filter(casa);
+    const porStatus = new Map();
+    for (const p of fila) {
+      if (!porStatus.has(p.status)) porStatus.set(p.status, { descr: String(p.status_descr ?? p.status).trim(), rows: [] });
+      porStatus.get(p.status).rows.push(p);
+    }
+    const ordenados = [...porStatus.entries()]
+      .sort((a, b) => (ORDEM_STATUS[a[0]] ?? a[0] + 10) - (ORDEM_STATUS[b[0]] ?? b[0] + 10));
+    return [ordenados, (data?.saiu ?? []).filter(casa), fila.length];
   }, [data, busca]);
 
   if (!data && !erro) return (
@@ -98,7 +103,7 @@ export default function PainelPedidos() {
             <span className="text-[10px] font-normal" style={{ color: '#4ade80' }}>AO VIVO</span>
           </h1>
           <p className="text-subtext text-[11px]">
-            Fila pendente + NFs emitidas hoje · nº decrescente (mais recentes no topo) · atualiza a cada 30s
+            Uma tabela por status (catálogo do ERP) · nº decrescente · atualiza a cada 30s
             {data?.ts && <> · última consulta {data.ts}</>}
           </p>
         </div>
@@ -109,34 +114,43 @@ export default function PainelPedidos() {
 
       {erro && <p className="text-accent_red text-xs mb-2">Erro ao consultar: {erro}</p>}
 
-      <div className="flex flex-col lg:flex-row gap-3 items-start w-full">
-        <Coluna titulo="⏳ Aguardando" cor={AMBAR} qtd={aguardando.length}
-          vazio="Nenhum pedido aguardando — esteira limpa!">
-          {aguardando.map(p => {
-            const chip = CHIP[p.status] ?? { txt: p.status_descr ?? '—', cor: '#8b949e' };
-            return <Linha key={`a-${p.pedido}`} chipTxt={chip.txt} chipCor={chip.cor}
-              razao={String(p.razao ?? p.cliente ?? '—').trim().toUpperCase()}
-              sub={<>pedido <b className="text-text_main">{String(p.pedido).trim()}</b>
-                {p.vendedor && <> · {String(p.vendedor).trim()}</>}
-                {p.emissao && <> · emitido {String(p.emissao).slice(8, 10)}/{String(p.emissao).slice(5, 7)}</>}</>} />;
-          })}
-        </Coluna>
-        <Coluna titulo="✓ Saiu Hoje" cor={VERDE} qtd={saiu.length}
-          vazio="Nenhuma NF emitida hoje ainda.">
-          {saiu.map(p => (
-            <Linha key={`s-${p.pedido}-${p.nf}`} chipTxt="✓ SAIU" chipCor={VERDE} brilho
-              razao={String(p.razao ?? p.cliente ?? '—').trim().toUpperCase()}
-              sub={<>pedido <b className="text-text_main">{String(p.pedido).trim()}</b>
-                {p.nf && <> · NF {String(p.nf).trim()}</>}
-                {p.emissao && <> · {hora(p.emissao)}</>}
-                {p.valor != null && <> · {brl(p.valor)}</>}</>} />
-          ))}
-        </Coluna>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-4">
+        <div className="bg-card border border-card_border rounded-lg px-4 py-3" style={{ borderTop: `2px solid ${AMBAR}` }}>
+          <p className="text-[10px] text-subtext uppercase" style={{ letterSpacing: '0.8px' }}>Na fila</p>
+          <p className="text-2xl font-bold mt-1" style={{ color: AMBAR }}>{totalFila}</p>
+        </div>
+        {grupos.slice(0, 2).map(([st, g]) => (
+          <div key={st} className="bg-card border border-card_border rounded-lg px-4 py-3"
+            style={{ borderTop: `2px solid ${COR_STATUS[st] ?? '#8b949e'}` }}>
+            <p className="text-[10px] text-subtext uppercase truncate" style={{ letterSpacing: '0.8px' }}>{g.descr}</p>
+            <p className="text-2xl font-bold mt-1" style={{ color: COR_STATUS[st] ?? '#8b949e' }}>{g.rows.length}</p>
+          </div>
+        ))}
+        <div className="bg-card border border-card_border rounded-lg px-4 py-3" style={{ borderTop: `2px solid ${VERDE}` }}>
+          <p className="text-[10px] text-subtext uppercase" style={{ letterSpacing: '0.8px' }}>Saíram hoje (NF)</p>
+          <p className="text-2xl font-bold mt-1" style={{ color: VERDE }}>{saiu.length}</p>
+        </div>
       </div>
 
-      <p className="text-subtext text-[10px] mt-3 opacity-70">
-        Aguardando = fila viva do painel do ERP (conferência → faturamento; inclui pendências de dias anteriores) ·
-        Saiu = pedidos com NF emitida HOJE (Fat=1, não cancelada) — ao faturar, o pedido sai da fila e aparece aqui.
+      {grupos.map(([st, g]) => (
+        <Secao key={st} titulo={`⏳ ${g.descr}`} cor={COR_STATUS[st] ?? '#8b949e'} qtd={g.rows.length}
+          right="entrega em vermelho = data vencida">
+          <DataTable columns={COLS_FILA} rows={g.rows} />
+        </Secao>
+      ))}
+      {grupos.length === 0 && (
+        <Secao titulo="⏳ Fila" cor={AMBAR} qtd={0}><p className="text-subtext text-sm text-center py-6">Nenhum pedido aguardando — esteira limpa!</p></Secao>
+      )}
+
+      <Secao titulo="✓ Saiu Hoje — NF emitida" cor={VERDE} qtd={saiu.length} right="Fat=1, não canceladas">
+        {saiu.length === 0
+          ? <p className="text-subtext text-sm text-center py-6">Nenhuma NF emitida hoje ainda.</p>
+          : <DataTable columns={COLS_SAIU} rows={saiu} />}
+      </Secao>
+
+      <p className="text-subtext text-[10px] mt-1 opacity-70">
+        Status conforme catálogo oficial (TbStatusOrcPedConsig) · valor via TbOrcPedVnd · "Na fila" = tempo desde a
+        emissão · ao faturar, o pedido sai da fila e entra em "Saiu Hoje".
       </p>
     </div>
   );
