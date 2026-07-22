@@ -7,7 +7,10 @@ const AMBAR = '#d29922', AZUL = '#1f6feb', VERDE = '#238636', VERM = '#da3633', 
 
 // Cores por status (catálogo TbStatusOrcPedConsig); desconhecidos caem no cinza
 const COR_STATUS = { 5: AMBAR, 3: AZUL, 2: ROXO, 44: ROXO, 45: ROXO, 46: ROXO, 47: ROXO, 48: ROXO, 49: ROXO, 50: ROXO };
-const ORDEM_STATUS = { 5: 0, 3: 1 };  // conferência antes de faturamento; resto por código
+// Fluxo REAL (comprovado no TbOrcPedVndLog): o pedido espera dias em
+// FATURAMENTO (3); a CONFERÊNCIA (5) é a última parada — minutos antes de
+// concluir (5→1 direto, nunca 5→3). Tabelas na ordem do fluxo:
+const ORDEM_STATUS = { 3: 0, 5: 1 };
 
 const hora = d => (d ? String(d).slice(11, 16) : '—');
 const razaoDe = p => String(p.razao ?? p.cliente ?? '—').trim().toUpperCase();
