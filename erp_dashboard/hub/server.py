@@ -479,23 +479,29 @@ def dados_painel_pedidos(token: str = Depends(verify_token)):
     """)
     if df.empty and db.last_error:
         raise HTTPException(status_code=503, detail=f"Painel indisponível: {db.last_error}")
-    # Ciclo real (comprovado nos dados): o pedido SAI da view quando fatura —
-    # nenhuma linha dela tem NF vinculada; status 1/6 são registros fósseis.
-    # Logo, "Saiu" = NFs de HOJE (Fat=1, não canceladas) vinculadas a pedido.
+    # Ciclo real (comprovado no TbOrcPedVndLog): conferência (5) → CONCLUÍDO (1)
+    # em minutos. "Saiu" = pedido com status 1 editado HOJE — cobre expedição e
+    # balcão. NF nem sempre vincula por TbNFVnd.NrOrcPedVnd (ex.: 993073 sem NF
+    # por esse campo), então o nº da NF é enriquecimento opcional via link NSU.
     df_saiu = db.new_conn_query("""
         SELECT TOP 500
-            n.NrOrcPedVnd   AS pedido,
-            c.RzsCli        AS razao,
-            c.NomeFantCli   AS cliente,
-            n.NrNFVnd       AS nf,
-            n.DtEmisNFVnd   AS emissao,
-            n.ValTotalNFVnd AS valor
-        FROM Blue.dbo.TbNFVnd n WITH (NOLOCK)
-        LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON c.CodRedCt = n.CodRedCliNFVnd
-        WHERE n.DtEmisNFVnd >= CAST(GETDATE() AS DATE)
-          AND n.DataHoraCanc IS NULL AND n.Fat = 1
-          AND TRY_CAST(n.NrOrcPedVnd AS INT) IS NOT NULL
-        ORDER BY TRY_CAST(n.NrOrcPedVnd AS INT)
+            o.NrOrcPedVnd       AS pedido,
+            c.RzsCli            AS razao,
+            c.NomeFantCli       AS cliente,
+            nfl.nf              AS nf,
+            o.DtHrEditOrcPedVnd AS emissao,
+            o.ValTotalOrcPedVnd AS valor
+        FROM Blue.dbo.TbOrcPedVnd o WITH (NOLOCK)
+        LEFT JOIN Blue.dbo.TbCli c WITH (NOLOCK) ON c.CodRedCt = o.CodRedCt
+        LEFT JOIN (SELECT l.NrOrcPedVnd, MAX(n.NrNFVnd) AS nf
+                   FROM Blue.dbo.TbOrcPedVndNFVnd l WITH (NOLOCK)
+                   JOIN Blue.dbo.TbNFVnd n WITH (NOLOCK) ON n.NSUNFVnd = l.NSUNFVnd
+                   WHERE n.DataHoraCanc IS NULL
+                     AND n.DtEmisNFVnd >= DATEADD(day, -30, GETDATE())
+                   GROUP BY l.NrOrcPedVnd) nfl ON nfl.NrOrcPedVnd = o.NrOrcPedVnd
+        WHERE o.StatusOrcPedConsig = 1
+          AND o.DtHrEditOrcPedVnd >= CAST(GETDATE() AS DATE)
+        ORDER BY o.NrOrcPedVnd DESC
     """)
     pedidos = df.to_dict("records")
     resumo: dict = {}
