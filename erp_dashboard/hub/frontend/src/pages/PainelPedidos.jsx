@@ -30,6 +30,15 @@ const COLS_FILA = [
   { key: 'emissao', label: 'Emitido', render: v => fmtDate(v) },
   { key: 'entrega', label: 'Entrega', render: (v, r) => v
       ? <span style={{ color: new Date(v) < new Date() ? '#f87171' : undefined }}>{fmtDate(v)}</span> : '—' },
+  { key: 'tp_entrega', label: 'Logística', render: (v, r) => {
+      const tipo = String(v ?? '').replace(/^\d+-/, '').trim();
+      const rota = String(r.rota ?? '').trim();
+      if (!tipo && !rota) return '—';
+      const retira = /retira/i.test(tipo);
+      return <span style={{ fontSize: 10, fontWeight: 600, padding: '1px 8px', borderRadius: 9999,
+        background: retira ? 'rgba(163,113,247,0.15)' : 'rgba(31,111,235,0.15)',
+        color: retira ? '#c4a7f7' : '#79c0ff' }}>{retira ? '🏬 Retira na Loja' : `🚚 ${rota || tipo || 'Entrega'}`}</span>;
+    } },
   { key: 'valor', label: 'Valor', align: 'right', render: v => (v != null ? brl(v) : '—') },
   { key: 'horas_fila', label: 'Na fila', render: v => agingBadge(v) },
 ];
