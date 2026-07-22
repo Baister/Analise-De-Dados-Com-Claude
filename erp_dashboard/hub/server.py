@@ -456,6 +456,7 @@ def dados_painel_pedidos(token: str = Depends(verify_token)):
     """Esteira de pedidos AO VIVO (vmPainelPedidoVndConf) — consulta direta,
     sem bot/cache: a view é leve (dezenas de linhas) e muda em tempo real."""
     _require_tab(token, "painel_pedidos")
+    from core.database import db
     df = db.new_conn_query("""
         SELECT TOP 500
             p.NrOrcPedVnd            AS pedido,
