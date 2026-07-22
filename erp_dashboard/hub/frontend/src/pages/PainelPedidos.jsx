@@ -114,14 +114,14 @@ export default function PainelPedidos() {
       {erro && <p className="text-accent_red text-xs mb-2">Erro ao consultar: {erro}</p>}
 
       <div className="flex flex-col lg:flex-row gap-3 items-start">
-        <Coluna titulo="⏳ Em Preparo" cor={AMBAR} itens={preparo} lado="preparo"
-          vazio="Nenhum pedido em preparo — esteira limpa!" />
+        <Coluna titulo="⏳ Aguardando" cor={AMBAR} itens={preparo} lado="preparo"
+          vazio="Nenhum pedido aguardando — esteira limpa!" />
         <Coluna titulo="✓ Pronto · Saiu" cor={VERDE} itens={pronto} lado="pronto"
           vazio="Nenhum pedido pronto ainda." />
       </div>
 
       <p className="text-subtext text-[10px] mt-3 opacity-70">
-        Em Preparo = aguardando conferência/faturamento (mais antigos no topo) · Pronto = NF emitida ou concluído
+        Aguardando =  conferência/faturamento (mais antigos no topo) · Pronto = NF emitida ou concluído
         (recentes no topo) · consulta direta ao ERP, sem cache.
       </p>
     </div>

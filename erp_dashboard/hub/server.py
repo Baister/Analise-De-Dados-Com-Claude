@@ -476,6 +476,9 @@ def dados_painel_pedidos(token: str = Depends(verify_token)):
     pedidos = df.to_dict("records")
     resumo: dict = {}
     for r in pedidos:
+        # numpy.int64 → int nativo: como CHAVE de dict o json.dumps não aceita
+        # (default=str só cobre valores) e no front o === compara com número
+        r["status"] = int(r["status"]) if r.get("status") is not None else 0
         resumo[r["status"]] = resumo.get(r["status"], 0) + 1
     payload = {"pedidos": pedidos, "resumo": resumo,
                "ts": datetime.now().strftime("%H:%M:%S")}
