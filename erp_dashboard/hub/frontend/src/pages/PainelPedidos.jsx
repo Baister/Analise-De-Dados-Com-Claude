@@ -38,7 +38,7 @@ function Linha({ p, lado }) {
 
 function Coluna({ titulo, cor, itens, lado, vazio }) {
   return (
-    <div className="bg-card border border-card_border rounded-xl p-4 flex-1"
+    <div className="bg-card border border-card_border rounded-xl p-4 flex-1 min-w-0 w-full"
       style={{ borderTop: `3px solid ${cor}` }}>
       <div className="flex items-center justify-between mb-3">
         <h2 className="font-extrabold uppercase" style={{ color: cor, fontSize: 'clamp(16px, 1.6vw, 22px)', letterSpacing: '1.5px' }}>
@@ -79,10 +79,9 @@ export default function PainelPedidos() {
       String(p.razao ?? '').toLowerCase().includes(q) ||
       String(p.cliente ?? '').toLowerCase().includes(q) ||
       String(p.pedido ?? '').toLowerCase().includes(q));
-    const prep = lista.filter(p => PREPARO.includes(p.status))
-      .sort((a, b) => String(a.emissao ?? '').localeCompare(String(b.emissao ?? '')));       // fila: mais antigo no topo
-    const pron = lista.filter(p => PRONTO.includes(p.status))
-      .sort((a, b) => String(b.editado ?? '').localeCompare(String(a.editado ?? '')));       // recém-prontos no topo
+    const porPedido = (a, b) => (Number(a.pedido) || 0) - (Number(b.pedido) || 0);  // nº crescente
+    const prep = lista.filter(p => PREPARO.includes(p.status)).sort(porPedido);
+    const pron = lista.filter(p => PRONTO.includes(p.status)).sort(porPedido);
     return [prep, pron];
   }, [data, busca]);
 
@@ -103,7 +102,7 @@ export default function PainelPedidos() {
             <span className="text-[10px] font-normal" style={{ color: '#4ade80' }}>AO VIVO</span>
           </h1>
           <p className="text-subtext text-[11px]">
-            Atualiza a cada 30s{data?.ts && <> · última consulta {data.ts}</>}
+            Somente pedidos de hoje · nº crescente · atualiza a cada 30s{data?.ts && <> · última consulta {data.ts}</>}
           </p>
         </div>
         <input type="text" placeholder="Buscar razão social ou nº do pedido…" value={busca}
@@ -121,8 +120,8 @@ export default function PainelPedidos() {
       </div>
 
       <p className="text-subtext text-[10px] mt-3 opacity-70">
-        Aguardando =  conferência/faturamento (mais antigos no topo) · Pronto = NF emitida ou concluído
-        (recentes no topo) · consulta direta ao ERP, sem cache.
+        Aguardando = conferência/faturamento · Pronto = NF emitida ou concluído · somente pedidos emitidos hoje,
+        em ordem crescente de nº · consulta direta ao ERP, sem cache.
       </p>
     </div>
   );
