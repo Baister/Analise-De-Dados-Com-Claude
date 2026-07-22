@@ -2484,6 +2484,15 @@ class BotCRM(BaseBot):
         """
 
         df_conv = db.new_conn_query(_sql_orc_kpis(_MES_INI, _MES_FIM))
+        if df_conv.empty:
+            # Boot frio em máquina nova: query central pode perder a disputa do
+            # 1º ciclo (HYT00). Retry único; se persistir e houver resultado
+            # anterior, ele é mantido no fim (nunca publicar CRM zerado).
+            logger.warning("[CRM] df_conv vazio (%s) — retry único", db.last_error or "sem erro")
+            df_conv = db.new_conn_query(_sql_orc_kpis(_MES_INI, _MES_FIM))
+            if df_conv.empty and self.resultado:
+                logger.warning("[CRM] df_conv vazio após retry — mantendo último resultado bom")
+                return self.resultado
         logger.info("[CRM] df_conv (TbOrcPedVnd): emitidos=%s abertos=%s | valor_orcado=%s%s",
                     df_conv["total_orcamentos"].iloc[0] if not df_conv.empty else "N/A",
                     df_conv["em_aberto"].iloc[0] if not df_conv.empty else "N/A",
